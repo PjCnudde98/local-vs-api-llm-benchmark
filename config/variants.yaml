@@ -1,0 +1,79 @@
+# One entry per experiment variant. Only model + hosting + PII handling differ;
+# prompt, policy, output format and generation settings are shared via `defaults`.
+#
+# allow_real_data: false means the runner refuses to send real (historical)
+# complaints to that variant. Cloud variants must keep it false until the DPO
+# has seen redaction results (plan, "Test dataset").
+
+defaults:
+  temperature: 0.2
+  max_tokens: 800
+  token_param: max_tokens      # use max_completion_tokens for newer Azure models
+  json_mode: true
+
+variants:
+  A:
+    label: Frontier / Azure EU Data Zone / raw text
+    provider: azure
+    model: ${AZURE_DEPLOYMENT_FRONTIER}
+    cloud: true
+    pii: raw
+    allow_real_data: false
+
+  B:
+    label: Frontier / Azure private endpoint / pseudonymised
+    provider: azure
+    model: ${AZURE_DEPLOYMENT_FRONTIER}
+    cloud: true
+    pii: pseudonymise
+    allow_real_data: false
+
+  C:
+    label: Mid-size open model / local GPU
+    provider: openai_compatible
+    base_url: ${LOCAL_MID_BASE_URL}
+    model: ${LOCAL_MID_MODEL}
+    cloud: false
+    pii: none
+    allow_real_data: true
+
+  D:
+    label: Small open model / laptop
+    provider: openai_compatible
+    base_url: ${LOCAL_SMALL_BASE_URL}
+    model: ${LOCAL_SMALL_MODEL}
+    reasoning_effort: none     # qwen3 thinks by default; thinking eats max_tokens
+    cloud: false
+    pii: none
+    allow_real_data: true
+
+  E:                            # optional: variant C model on own Azure GPU VM
+    label: Mid-size open model / GPU VM in own Azure subscription
+    provider: openai_compatible
+    base_url: ${AZURE_VM_BASE_URL}
+    model: ${LOCAL_MID_MODEL}
+    cloud: true
+    pii: pseudonymise
+    allow_real_data: false
+
+  # Smoke-test variant: no model, no network. Use `cexp run --variants FAKE`.
+  FAKE:
+    label: Deterministic fake model for dry runs
+    provider: fake
+    model: fake-1
+    cloud: false
+    pii: none
+    allow_real_data: true
+
+# LLM judge. Must not be the same model as the variant being judged, and use
+# another model family than variant A where possible (plan, "Risks").
+judge:
+  label: LLM judge
+  provider: azure
+  model: ${AZURE_DEPLOYMENT_JUDGE}
+  cloud: true
+  pii: raw
+  allow_real_data: false
+  temperature: 0.0
+  max_tokens: 600
+  json_mode: true

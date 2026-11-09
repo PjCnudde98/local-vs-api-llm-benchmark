@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.pytest_cache/
+
+# Real complaints must never be committed or leave this machine.
+data/real/*
+!data/real/.gitkeep
+
+# Run outputs can contain complaint text.
+results/*
+!results/.gitkeep
+.coverage

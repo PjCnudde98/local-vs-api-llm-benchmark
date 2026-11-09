@@ -1,0 +1,26 @@
+# Axes for LLM-generated synthetic complaints (plan, "Test dataset").
+# Adjust language weights to your real inflow. Replace/extend scenario seeds with
+# anonymised real complaint scenarios (what happened, not who it happened to).
+languages: {nl: 0.5, fr: 0.3, en: 0.2}
+
+types: [delivery, damage, billing, refund, staff, repeat]
+
+difficulties:
+  - simple          # polite and short
+  - angry           # angry or sarcastic
+  - rambling        # long, off-topic details
+  - multi_issue     # two or three problems in one message
+  - legal           # legal or press threats
+  - out_of_policy   # asks for something the policy does not allow
+
+pii_patterns:       # at least a few of these per complaint
+  - full name
+  - home address
+  - phone number
+  - email address
+  - IBAN
+  - order number (format ORD-1234567)
+  - Belgian national register number (format 85.07.30-033.28)
+  - signature block or pasted email thread
+
+sensitive_context: [none, none, none, health or disability, bereavement, financial hardship]

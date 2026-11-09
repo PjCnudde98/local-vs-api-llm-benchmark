@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+:root {
+  color-scheme: light;
+  --surface-0: #f3f2ef; --surface-1: #fcfcfb; --surface-2: #f0efec; --border: #e1e0db; --grid: #e6e5e0;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974;
+  --accent: #2a78d6;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+  --seq-100: #cde2fb; --seq-200: #9ec5f4; --seq-300: #6da7ec; --seq-400: #3987e5; --seq-500: #256abf; --seq-600: #184f95; --seq-700: #0d366b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #232321; --border: #33332f; --grid: #2c2c29;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86; --accent: #3987e5;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #232321; --border: #33332f; --grid: #2c2c29;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86; --accent: #3987e5;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--surface-0); color: var(--text-primary);
+  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 24px 16px 64px; }
+header.top { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+h2 { font-size: 16px; margin: 0 0 4px; }
+h3 { font-size: 13px; margin: 16px 0 6px; color: var(--text-secondary); font-weight: 600; }
+.sub { color: var(--text-secondary); margin: 0; }
+.muted { color: var(--text-muted); }
+.small { font-size: 12px; }
+button, select { font: inherit; color: inherit; }
+.btn { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+.btn:hover { background: var(--surface-2); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 20px 0; }
+.tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.tile .label { color: var(--text-secondary); font-size: 12px; }
+.tile .value { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tile .hint { font-size: 12px; color: var(--text-muted); }
+section.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin: 16px 0; }
+.card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.filters { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--surface-0) 92%, transparent);
+  backdrop-filter: blur(6px); padding: 10px 0; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+  border-bottom: 1px solid var(--border); }
+.filters label { font-size: 12px; color: var(--text-secondary); display: flex; gap: 6px; align-items: center; }
+.filters select { background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 999px;
+  padding: 2px 10px 2px 8px; background: var(--surface-1); cursor: pointer; font-size: 12px; user-select: none; }
+.chip[aria-pressed="false"] { opacity: .45; }
+.vn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; flex: none; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text-secondary); margin: 4px 0 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--text-secondary); font-weight: 600; font-size: 12px; white-space: nowrap; }
+td.num, th.num { text-align: right; }
+.status { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; white-space: nowrap; }
+.status .ico { width: 16px; height: 16px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 11px; color: #fff; }
+.status.pass .ico { background: var(--good); }
+.status.fail .ico { background: var(--critical); }
+.status.not_measured .ico { background: transparent; border: 1.5px dashed var(--text-muted); color: var(--text-muted); }
+.status.not_measured { color: var(--text-muted); font-weight: 500; }
+.chart { width: 100%; position: relative; }
+.chart svg { display: block; width: 100%; overflow: visible; }
+.chart text { fill: var(--text-secondary); font-size: 11px; }
+.chart .lbl { fill: var(--text-primary); font-size: 12px; }
+.empty { color: var(--text-muted); padding: 16px 0; }
+#tip { position: fixed; pointer-events: none; z-index: 50; background: var(--surface-1); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.15);
+  max-width: 280px; display: none; }
+#tip b { font-weight: 600; }
+.heat td.cell { text-align: center; min-width: 64px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 820px) { .grid2 { grid-template-columns: 1fr; } }
+.explorer { display: grid; grid-template-columns: 260px 1fr; gap: 16px; }
+@media (max-width: 820px) { .explorer { grid-template-columns: 1fr; } }
+.clist { max-height: 560px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+.clist button { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--grid);
+  background: transparent; padding: 8px 10px; cursor: pointer; }
+.clist button:hover { background: var(--surface-2); }
+.clist button[aria-current="true"] { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--accent); }
+.tag { display: inline-block; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; margin-right: 4px; color: var(--text-secondary); }
+.quote { background: var(--surface-2); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; margin: 6px 0 12px; }
+.drafts { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.draft { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.draft .dh { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-bottom: 6px; }
+.draft pre { white-space: pre-wrap; font: inherit; margin: 0; }
+.draft .meta { font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
+.note { font-size: 12px; color: var(--text-secondary); border-left: 3px solid var(--border); padding-left: 8px; margin-top: 8px; }
+details summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; }
+footer { color: var(--text-muted); font-size: 12px; margin-top: 32px; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: var(--surface-2); padding: 1px 4px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>On-prem vs cloud LLM for complaint replies</h1>
+      <p class="sub" id="subtitle"></p>
+    </div>
+    <button class="btn" id="theme" type="button" aria-label="Toggle light or dark theme">Theme</button>
+  </header>
+
+  <div class="tiles" id="tiles"></div>
+
+  <section class="card" id="gates-card">
+    <div class="card-head">
+      <div><h2>Decision gates</h2><p class="sub small">Thresholds fixed before results (<code>config/gates.yaml</code>). Computed on all data, not the filters below.</p></div>
+      <div class="chips" id="gate-filter"></div>
+    </div>
+    <div class="table-wrap"><table id="gates"></table></div>
+  </section>
+
+  <div class="filters" id="filters" role="group" aria-label="Filters">
+    <div class="chips" id="f-variants" aria-label="Models"></div>
+    <label>Language <select id="f-language"></select></label>
+    <label>Type <select id="f-type"></select></label>
+    <label>Difficulty <select id="f-difficulty"></select></label>
+    <label>Data <select id="f-source"></select></label>
+    <label>Scores from <select id="f-scores"><option value="judge">LLM judge</option><option value="human">Human raters</option></select></label>
+    <span class="small muted" id="f-count"></span>
+  </div>
+
+  <section class="card">
+    <div class="card-head"><div><h2>Time to draft</h2><p class="sub small">Every dot is one draft. Ticks show p50 and p95; the vertical line is the p95 gate.</p></div></div>
+    <div class="legend"><span><svg width="14" height="14"><line x1="7" y1="1" x2="7" y2="13" stroke="var(--text-primary)" stroke-width="2"/></svg>p50</span><span><svg width="14" height="14"><line x1="7" y1="1" x2="7" y2="13" stroke="var(--text-secondary)" stroke-width="2" stroke-dasharray="3 2"/></svg>p95</span></div>
+    <div class="chart" id="c-latency"></div>
+    <div class="table-wrap"><table id="t-ops"></table></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><div><h2>Quality by rubric criterion</h2><p class="sub small" id="q-sub"></p></div></div>
+    <div class="legend" id="q-legend"></div>
+    <div class="chart" id="c-quality"></div>
+    <div class="table-wrap"><table id="t-quality"></table></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div><h2>Breakdown</h2><p class="sub small">Darker is higher. Hover a cell for the sample size.</p></div>
+      <div class="filters" style="position:static;border:0;padding:0;background:none">
+        <label>Rows <select id="b-dim"><option value="language">Language</option><option value="type">Complaint type</option><option value="difficulty">Difficulty</option></select></label>
+        <label>Metric <select id="b-metric"><option value="overall">Rubric average</option><option value="p50">p50 latency (s)</option><option value="fail">Failure rate</option></select></label>
+      </div>
+    </div>
+    <div class="table-wrap"><table class="heat" id="t-heat"></table></div>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <h2>Privacy: redaction recall</h2>
+      <p class="sub small" id="r-sub"></p>
+      <div class="chart" id="c-redaction"></div>
+      <div id="r-missed"></div>
+    </section>
+    <section class="card">
+      <h2>Effort: hours logged</h2>
+      <p class="sub small" id="e-sub"></p>
+      <div class="chart" id="c-effort"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Cost per 1,000 replies (EUR)</h2>
+    <p class="sub small">From <code>config/costs.yaml</code>. n/a means the input is still empty.</p>
+    <div class="table-wrap"><table id="t-cost"></table></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><div><h2>Complaint explorer</h2><p class="sub small">Every model's draft for one complaint, side by side. Follows the filters above.</p></div></div>
+    <div class="explorer">
+      <div class="clist" id="x-list" role="listbox" aria-label="Complaints"></div>
+      <div id="x-detail"></div>
+    </div>
+  </section>
+
+  <footer id="footer"></footer>
+</div>
+<div id="tip" role="tooltip"></div>
+
+<script type="application/json" id="report-data">__DATA__</script>
+<script>
+(() => {
+"use strict";
+const D = JSON.parse(document.getElementById("report-data").textContent);
+const R = D.records || [];
+const CRIT = Object.keys((D.rubric && D.rubric.criteria) || {});
+const SCALE = (D.rubric && D.rubric.scale) || [1, 5];
+const GATES = D.gates || [];
+const thr = (name) => { const g = GATES.find(g => g.gate === name); return g ? g.threshold : null; };
+const P95_GATE = thr("p95 time to draft (s)");
+const RUBRIC_GATE = thr("Rubric average (1-5)");
+
+// ---------- helpers ----------
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt = (x, d = 2) => x == null || Number.isNaN(x) ? "n/a" : Number(x).toFixed(d);
+const pct = (x, d = 1) => x == null ? "n/a" : (100 * x).toFixed(d) + "%";
+const mean = (a) => a.length ? a.reduce((s, x) => s + x, 0) / a.length : null;
+const median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const nearestRank = (a, q) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.max(0, Math.ceil(q * s.length) - 1))]; };
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function bootstrap(vals, n = 2000) {
+  if (vals.length < 2) return null;
+  const rnd = mulberry32(7), ms = [];
+  for (let i = 0; i < n; i++) { let s = 0; for (let j = 0; j < vals.length; j++) s += vals[(rnd() * vals.length) | 0]; ms.push(s / vals.length); }
+  ms.sort((a, b) => a - b);
+  return [ms[Math.floor(0.025 * n)], ms[Math.min(n - 1, Math.floor(0.975 * n))]];
+}
+const uniq = (a) => [...new Set(a)].sort();
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+// Colour follows the variant, never its rank or the filter state.
+const ORDER = ["A", "B", "C", "D", "E", "FAKE"];
+const ALLV = uniq(R.map(r => r.variant)).sort((a, b) => (ORDER.indexOf(a) + 1 || 99) - (ORDER.indexOf(b) + 1 || 99) || a.localeCompare(b));
+const SLOT = {}; ALLV.forEach((v, i) => { const k = ORDER.indexOf(v); SLOT[v] = `var(--s${(k >= 0 ? (v === "FAKE" ? 7 : k + 1) : Math.min(8, ORDER.length + i)) })`; });
+const colour = (v) => SLOT[v] || "var(--s8)";
+const sw = (v) => `<span class="sw" style="background:${colour(v)}"></span>`;
+const NAMES = D.names || {};
+const name = (v) => NAMES[v] || v;
+const vlabel = (v) => `<span class="vn">${sw(v)}${esc(name(v))}</span>`;
+
+// ---------- tooltip ----------
+const tip = $("tip");
+document.addEventListener("mousemove", (e) => {
+  const t = e.target.closest && e.target.closest("[data-tip]");
+  if (!t) { tip.style.display = "none"; return; }
+  tip.innerHTML = t.getAttribute("data-tip");
+  tip.style.display = "block";
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = e.clientX + 14, y = e.clientY + 14;
+  if (x + w > innerWidth - 8) x = e.clientX - w - 14;
+  if (y + h > innerHeight - 8) y = e.clientY - h - 14;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+});
+
+// ---------- theme ----------
+const root = document.documentElement;
+try { const t = localStorage.getItem("cexp-theme"); if (t) root.dataset.theme = t; } catch (e) {}
+$("theme").addEventListener("click", () => {
+  const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("cexp-theme", root.dataset.theme); } catch (e) {}
+  renderAll();
+});
+
+// ---------- header + tiles ----------
+const m = D.meta || {};
+$("subtitle").textContent = `Report generated ${(m.generated_at || "").replace("T", " ").replace("+00:00", " UTC")} · harness ${m.harness_version || "?"}`;
+const gc = { pass: 0, fail: 0, not_measured: 0 }; GATES.forEach(g => gc[g.status]++);
+const tiles = [
+  ["Drafts", R.length, `${m.n_complaints || 0} complaints`],
+  ["Models", ALLV.length, ALLV.map(name).join(", ") || "none yet"],
+  ["Gates passed", gc.pass, `of ${GATES.length}`],
+  ["Gates failed", gc.fail, gc.fail ? "see table below" : "none"],
+  ["Not measured", gc.not_measured, "missing data"],
+  ["Hours logged", fmt((D.effort || {}).total_hours, 1), `${(D.effort || {}).entries || 0} entries`],
+];
+$("tiles").innerHTML = tiles.map(([l, v, h]) => `<div class="tile"><div class="label">${l}</div><div class="value">${v}</div><div class="hint">${esc(h)}</div></div>`).join("");
+
+// ---------- gates table ----------
+const STATUS_LABEL = { pass: ["✓", "Pass"], fail: ["✕", "Fail"], not_measured: ["?", "Not measured"] };
+let gateFilter = new Set(["pass", "fail", "not_measured"]);
+const isPct = (g) => /rate|recall|Pairwise/.test(g.gate);
+function renderGates() {
+  $("gate-filter").innerHTML = Object.entries(STATUS_LABEL).map(([k, [, l]]) =>
+    `<span class="chip" role="button" tabindex="0" data-g="${k}" aria-pressed="${gateFilter.has(k)}">${l} (${gc[k]})</span>`).join("");
+  const rows = GATES.filter(g => gateFilter.has(g.status));
+  $("gates").innerHTML = `<thead><tr><th>Dimension</th><th>Gate</th><th>Applies to</th><th class="num">Value</th><th class="num">Threshold</th><th>Status</th><th>Source (n)</th><th>Note</th></tr></thead><tbody>` +
+    rows.map(g => {
+      const [ico, lab] = STATUS_LABEL[g.status];
+      const val = g.value == null ? "n/a" : isPct(g) ? pct(g.value) : fmt(g.value);
+      const th = isPct(g) ? (100 * g.threshold).toFixed(0) + "%" : g.threshold;
+      const who = ALLV.includes(g.variant) ? `${vlabel(g.variant)}` : esc(name(g.variant));
+      return `<tr><td>${esc(g.dimension)}</td><td>${esc(g.gate)}</td><td>${who}</td><td class="num">${val}</td><td class="num">${esc(g.op)} ${th}</td>` +
+        `<td><span class="status ${g.status}"><span class="ico" aria-hidden="true">${ico}</span>${lab}</span></td>` +
+        `<td class="small">${g.source && g.n != null ? esc(g.source) + " (" + g.n + ")" : ""}</td><td class="small muted">${esc(g.note)}</td></tr>`;
+    }).join("") + "</tbody>";
+}
+$("gate-filter").addEventListener("click", (e) => {
+  const c = e.target.closest("[data-g]"); if (!c) return;
+  const k = c.dataset.g; gateFilter.has(k) ? gateFilter.delete(k) : gateFilter.add(k); renderGates();
+});
+
+// ---------- filters ----------
+const F = { variants: new Set(ALLV), language: "", type: "", difficulty: "", source: "", scores: "judge" };
+function fillSelect(id, key, label) {
+  const vals = uniq(R.map(r => r[key]));
+  $(id).innerHTML = `<option value="">All ${label}</option>` + vals.map(v => `<option>${esc(v)}</option>`).join("");
+  $(id).addEventListener("change", (e) => { F[key] = e.target.value; renderAll(); });
+}
+fillSelect("f-language", "language", "languages");
+fillSelect("f-type", "type", "types");
+fillSelect("f-difficulty", "difficulty", "difficulties");
+fillSelect("f-source", "source", "data");
+const hasHuman = R.some(r => r.human), hasJudge = R.some(r => r.judge);
+if (hasHuman && !hasJudge) F.scores = "human";
+$("f-scores").value = F.scores;
+$("f-scores").addEventListener("change", (e) => { F.scores = e.target.value; renderAll(); });
+$("f-variants").innerHTML = ALLV.map(v => `<span class="chip" role="button" tabindex="0" aria-pressed="true" data-v="${esc(v)}">${sw(v)}${esc(name(v))}</span>`).join("");
+$("f-variants").addEventListener("click", (e) => {
+  const c = e.target.closest("[data-v]"); if (!c) return;
+  const v = c.dataset.v;
+  if (F.variants.has(v) && F.variants.size > 1) F.variants.delete(v); else F.variants.add(v);
+  c.setAttribute("aria-pressed", F.variants.has(v));
+  [...$("f-variants").children].forEach(ch => ch.setAttribute("aria-pressed", F.variants.has(ch.dataset.v)));
+  renderAll();
+});
+document.addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && e.target.matches(".chip")) { e.preventDefault(); e.target.click(); } });
+
+const filtered = () => R.filter(r => F.variants.has(r.variant) && (!F.language || r.language === F.language) &&
+  (!F.type || r.type === F.type) && (!F.difficulty || r.difficulty === F.difficulty) && (!F.source || r.source === F.source));
+const visibleVariants = (rows) => ALLV.filter(v => F.variants.has(v) && rows.some(r => r.variant === v));
+const scoreOf = (r) => r[F.scores];
+const overallOf = (r) => { const s = scoreOf(r); if (!s) return null; const vals = CRIT.map(c => s.scores[c]).filter(x => x != null); return vals.length ? mean(vals) : null; };
+
+// ---------- latency strip ----------
+function renderLatency(rows) {
+  const el = $("c-latency"); const vs = visibleVariants(rows);
+  const ok = rows.filter(r => !r.error && r.latency_s != null);
+  if (!ok.length) { el.innerHTML = `<p class="empty">No successful runs match the filters.</p>`; return; }
+  const W = el.clientWidth || 800, L = Math.min(240, 16 + 7 * Math.max(...vs.map(v => name(v).length))), Rm = 24, rowH = 44, top = 22, H = top + vs.length * rowH + 28;
+  const maxV = Math.max(...ok.map(r => r.latency_s), P95_GATE || 0) * 1.08;
+  const x = (v) => L + (W - L - Rm) * v / maxV;
+  const step = niceStep(maxV, 6), ticks = []; for (let t = 0; t <= maxV; t += step) ticks.push(t);
+  let s = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="Latency per draft by variant">`;
+  ticks.forEach(t => s += `<line x1="${x(t)}" x2="${x(t)}" y1="${top - 2}" y2="${H - 22}" stroke="var(--grid)" stroke-width="1"/><text x="${x(t)}" y="${H - 6}" text-anchor="middle">${t}s</text>`);
+  if (P95_GATE != null) s += `<line x1="${x(P95_GATE)}" x2="${x(P95_GATE)}" y1="${top}" y2="${H - 22}" stroke="var(--critical)" stroke-width="1.5"/><text x="${x(P95_GATE)}" y="${top - 8}" text-anchor="middle">p95 gate ${P95_GATE}s</text>`;
+  vs.forEach((v, i) => {
+    const cy = top + i * rowH + rowH / 2, lat = ok.filter(r => r.variant === v);
+    const ls = lat.map(r => r.latency_s), p50 = nearestRank(ls, .5), p95 = nearestRank(ls, .95);
+    s += `<text class="lbl" x="${L - 12}" y="${cy + 4}" text-anchor="end">${esc(name(v))}</text>`;
+    lat.forEach((r, j) => {
+      const jy = cy + ((hash(r.complaint_id) % 15) - 7);
+      s += `<circle cx="${x(r.latency_s)}" cy="${jy}" r="4.5" fill="${colour(v)}" stroke="var(--surface-1)" stroke-width="2" data-tip="<b>${esc(name(v))}</b> · ${esc(r.complaint_id)}<br>${fmt(r.latency_s)} s · ${esc(r.language)} · ${esc(r.type)}"/>` +
+           `<circle cx="${x(r.latency_s)}" cy="${jy}" r="10" fill="transparent" data-tip="<b>${esc(name(v))}</b> · ${esc(r.complaint_id)}<br>${fmt(r.latency_s)} s · ${esc(r.language)} · ${esc(r.type)}"/>`;
+    });
+    if (p50 != null) s += `<line x1="${x(p50)}" x2="${x(p50)}" y1="${cy - 14}" y2="${cy + 14}" stroke="var(--text-primary)" stroke-width="2" stroke-linecap="round" data-tip="<b>${esc(name(v))}</b> p50 ${fmt(p50)} s"/>`;
+    if (p95 != null) s += `<line x1="${x(p95)}" x2="${x(p95)}" y1="${cy - 14}" y2="${cy + 14}" stroke="var(--text-secondary)" stroke-width="2" stroke-dasharray="3 2" data-tip="<b>${esc(name(v))}</b> p95 ${fmt(p95)} s"/>`;
+  });
+  el.innerHTML = s + "</svg>";
+
+  $("t-ops").innerHTML = `<thead><tr><th>Model</th><th class="num">Drafts</th><th class="num">p50 s</th><th class="num">p95 s</th><th class="num">Max s</th><th class="num">Errors</th><th class="num">Parse failures</th><th class="num">Mean in / out tokens</th></tr></thead><tbody>` +
+    vs.map(v => {
+      const rs = rows.filter(r => r.variant === v), okr = rs.filter(r => !r.error), ls = okr.map(r => r.latency_s).filter(x => x != null);
+      const pin = mean(okr.map(r => r.prompt_tokens).filter(Boolean)), pout = mean(okr.map(r => r.completion_tokens).filter(Boolean));
+      const p95 = nearestRank(ls, .95);
+      return `<tr><td>${vlabel(v)}</td><td class="num">${rs.length}</td><td class="num">${fmt(nearestRank(ls, .5))}</td>` +
+        `<td class="num">${fmt(p95)}${P95_GATE != null && p95 != null && p95 >= P95_GATE ? ' <span class="status fail"><span class="ico" aria-hidden="true">✕</span></span>' : ""}</td><td class="num">${fmt(ls.length ? Math.max(...ls) : null)}</td>` +
+        `<td class="num">${rs.filter(r => r.error).length}</td><td class="num">${okr.filter(r => !r.parse_ok).length}</td><td class="num">${fmt(pin, 0)} / ${fmt(pout, 0)}</td></tr>`;
+    }).join("") + "</tbody>";
+}
+function hash(s) { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) | 0; return Math.abs(h); }
+function niceStep(max, n) { const raw = max / n, p = Math.pow(10, Math.floor(Math.log10(raw || 1))); const f = raw / p; return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * p; }
+
+// ---------- quality grouped bars ----------
+function renderQuality(rows) {
+  const el = $("c-quality");
+  const scored = rows.filter(r => scoreOf(r));
+  const vs = visibleVariants(scored);
+  $("q-sub").textContent = `${F.scores === "human" ? "Blind human scores (mean over raters)" : "LLM judge scores"}, scale ${SCALE[0]}-${SCALE[1]}. Line = gate at ${RUBRIC_GATE ?? "?"}.`;
+  $("q-legend").innerHTML = vs.length > 1 ? vs.map(v => `<span>${sw(v)}${esc(name(v))}</span>`).join("") : "";
+  if (!scored.length) {
+    el.innerHTML = `<p class="empty">No ${F.scores === "human" ? "human" : "judge"} scores for these filters yet. Run <code>cexp judge</code> or <code>cexp import-scores</code>.</p>`;
+    $("t-quality").innerHTML = ""; return;
+  }
+  const groups = [...CRIT, "overall"];
+  const val = (v, c) => { const rs = scored.filter(r => r.variant === v); const xs = rs.map(r => c === "overall" ? overallOf(r) : scoreOf(r).scores[c]).filter(x => x != null); return { m: mean(xs), n: xs.length }; };
+  const W = el.clientWidth || 800, L = 150, Rm = 40, barH = Math.min(14, Math.max(8, 60 / vs.length)), gap = 2, groupGap = 14;
+  const gH = vs.length * (barH + gap) - gap, H = 8 + groups.length * (gH + groupGap) + 20;
+  const x = (v) => L + (W - L - Rm) * v / SCALE[1];
+  let s = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="Mean rubric score per criterion and variant">`;
+  for (let t = 0; t <= SCALE[1]; t++) s += `<line x1="${x(t)}" x2="${x(t)}" y1="4" y2="${H - 18}" stroke="var(--grid)"/><text x="${x(t)}" y="${H - 4}" text-anchor="middle">${t}</text>`;
+  groups.forEach((g, gi) => {
+    const y0 = 8 + gi * (gH + groupGap);
+    s += `<text class="lbl" x="${L - 10}" y="${y0 + gH / 2 + 4}" text-anchor="end" ${g === "overall" ? 'font-weight="600"' : ""}>${esc(g.replace(/_/g, " "))}</text>`;
+    vs.forEach((v, vi) => {
+      const { m, n } = val(v, g); if (m == null) return;
+      const y = y0 + vi * (barH + gap), w = Math.max(1, x(m) - x(0)), r = Math.min(4, barH / 2, w);
+      const tipTxt = `<b>${esc(name(v))}</b> · ${esc(g.replace(/_/g, " "))}<br>mean ${fmt(m)} (n=${n})`;
+      s += `<path d="M${x(0)},${y}h${w - r}a${r},${r} 0 0 1 ${r},${r}v${barH - 2 * r}a${r},${r} 0 0 1 ${-r},${r}h${-(w - r)}z" fill="${colour(v)}" data-tip="${tipTxt}"/>`;
+      s += `<rect x="${x(0)}" y="${y - 1}" width="${W - L - Rm}" height="${barH + 2}" fill="transparent" data-tip="${tipTxt}"/>`;
+      if (g === "overall") s += `<text x="${x(m) + 6}" y="${y + barH / 2 + 4}" class="lbl">${fmt(m)}</text>`;
+    });
+  });
+  if (RUBRIC_GATE != null) s += `<line x1="${x(RUBRIC_GATE)}" x2="${x(RUBRIC_GATE)}" y1="4" y2="${H - 18}" stroke="var(--critical)" stroke-width="1.5"/>`;
+  el.innerHTML = s + "</svg>";
+
+  const hallGate = thr("Hallucination rate");
+  $("t-quality").innerHTML = `<thead><tr><th>Model</th><th class="num">n</th><th class="num">Overall</th><th class="num">95% CI (bootstrap)</th><th class="num">Hallucination rate</th><th class="num">Edit min (median)</th>${CRIT.map(c => `<th class="num">${esc(c.replace(/_/g, " "))}</th>`).join("")}</tr></thead><tbody>` +
+    vs.map(v => {
+      const rs = scored.filter(r => r.variant === v), ov = rs.map(overallOf).filter(x => x != null);
+      const ci = bootstrap(ov), hs = rs.map(r => scoreOf(r).hallucination).filter(x => x != null);
+      const em = rs.map(r => scoreOf(r).edit_minutes).filter(x => x != null), hr = hs.length ? mean(hs) : null;
+      return `<tr><td>${vlabel(v)}</td><td class="num">${rs.length}</td><td class="num"><b>${fmt(mean(ov))}</b></td><td class="num">${ci ? fmt(ci[0]) + " – " + fmt(ci[1]) : "n/a"}</td>` +
+        `<td class="num">${pct(hr)}${hallGate != null && hr != null && hr >= hallGate ? ' <span class="status fail"><span class="ico" aria-hidden="true">✕</span></span>' : ""}</td><td class="num">${fmt(median(em), 1)}</td>` +
+        CRIT.map(c => `<td class="num">${fmt(mean(rs.map(r => scoreOf(r).scores[c]).filter(x => x != null)))}</td>`).join("") + "</tr>";
+    }).join("") + "</tbody>";
+}
+
+// ---------- breakdown heat table ----------
+const SEQ = ["--seq-100", "--seq-200", "--seq-300", "--seq-400", "--seq-500", "--seq-600", "--seq-700"];
+function renderHeat(rows) {
+  const dim = $("b-dim").value, metric = $("b-metric").value, vs = visibleVariants(rows), vals = uniq(rows.map(r => r[dim]));
+  const cell = (v, k) => {
+    const rs = rows.filter(r => r.variant === v && r[dim] === k);
+    if (metric === "overall") { const xs = rs.map(overallOf).filter(x => x != null); return { val: mean(xs), n: xs.length }; }
+    if (metric === "p50") { const xs = rs.filter(r => !r.error && r.latency_s != null).map(r => r.latency_s); return { val: nearestRank(xs, .5), n: xs.length }; }
+    return { val: rs.length ? rs.filter(r => r.error || !r.parse_ok).length / rs.length : null, n: rs.length };
+  };
+  const all = []; vals.forEach(k => vs.forEach(v => { const c = cell(v, k); if (c.val != null) all.push(c.val); }));
+  const lo = metric === "overall" ? SCALE[0] : 0, hi = metric === "overall" ? SCALE[1] : Math.max(1e-9, ...all);
+  const shade = (x) => { const i = Math.max(0, Math.min(SEQ.length - 1, Math.round((x - lo) / (hi - lo || 1) * (SEQ.length - 1)))); return [SEQ[i], i >= 3 ? "#ffffff" : "#0b0b0b"]; };
+  if (!vals.length || !vs.length) { $("t-heat").innerHTML = `<tr><td class="empty">No data for these filters.</td></tr>`; return; }
+  $("t-heat").innerHTML = `<thead><tr><th>${esc(dim)}</th>${vs.map(v => `<th class="num">${vlabel(v)}</th>`).join("")}</tr></thead><tbody>` +
+    vals.map(k => `<tr><td>${esc(k)}</td>` + vs.map(v => {
+      const c = cell(v, k);
+      if (c.val == null) return `<td class="cell muted">–</td>`;
+      const [bg, fg] = shade(c.val), txt = metric === "fail" ? pct(c.val, 0) : fmt(c.val, metric === "p50" ? 1 : 2);
+      return `<td class="cell" style="background:var(${bg});color:${fg}" data-tip="<b>${esc(name(v))}</b> · ${esc(k)}<br>${txt} (n=${c.n})">${txt}</td>`;
+    }).join("") + "</tr>").join("") + "</tbody>";
+}
+$("b-dim").addEventListener("change", () => renderAll());
+$("b-metric").addEventListener("change", () => renderAll());
+
+// ---------- simple single-series horizontal bars ----------
+function hbars(el, items, { max, unit = "", gate = null, gateLabel = "", fmtV = (v) => fmt(v, 1) }) {
+  if (!items.length) { el.innerHTML = `<p class="empty">No data yet.</p>`; return; }
+  const W = el.clientWidth || 400, L = 120, Rm = 56, bh = 16, gap = 10, H = 8 + items.length * (bh + gap) + 16;
+  const x = (v) => L + (W - L - Rm) * v / max;
+  let s = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img">`;
+  s += `<line x1="${x(0)}" x2="${x(0)}" y1="4" y2="${H - 12}" stroke="var(--grid)"/>`;
+  items.forEach((it, i) => {
+    const y = 8 + i * (bh + gap), w = Math.max(1, x(it.v) - x(0)), r = Math.min(4, w);
+    s += `<text class="lbl" x="${L - 10}" y="${y + bh / 2 + 4}" text-anchor="end">${esc(it.k)}</text>`;
+    s += `<path d="M${x(0)},${y}h${w - r}a${r},${r} 0 0 1 ${r},${r}v${bh - 2 * r}a${r},${r} 0 0 1 ${-r},${r}h${-(w - r)}z" fill="var(--s1)" data-tip="${esc(it.tip || it.k + ": " + fmtV(it.v) + unit)}"/>`;
+    s += `<text x="${x(it.v) + 6}" y="${y + bh / 2 + 4}">${fmtV(it.v)}${unit}</text>`;
+  });
+  if (gate != null) s += `<line x1="${x(gate)}" x2="${x(gate)}" y1="4" y2="${H - 12}" stroke="var(--critical)" stroke-width="1.5"/><text x="${x(gate)}" y="${H - 1}" text-anchor="middle">${esc(gateLabel)}</text>`;
+  el.innerHTML = s + "</svg>";
+}
+function renderRedaction() {
+  const red = D.redaction;
+  if (!red) { $("r-sub").innerHTML = "No redaction eval stored yet. Run <code>cexp redaction-eval</code>."; $("c-redaction").innerHTML = ""; return; }
+  const g = GATES.find(g => g.gate.startsWith("Redaction recall"));
+  $("r-sub").innerHTML = `Latest run ${esc(red.ts)} · NER ${red.has_ner ? "on" : "<b>off</b> (regex only)"} · line = ${g ? (100 * g.threshold).toFixed(0) + "%" : ""} gate`;
+  hbars($("c-redaction"), red.types.map(t => ({ k: t.type, v: 100 * t.recall, tip: `<b>${esc(t.type)}</b><br>recall ${pct(t.recall)} · ${t.leaked} of ${t.n} leaked` })),
+    { max: 100, unit: "%", gate: g ? 100 * g.threshold : null, gateLabel: "", fmtV: (v) => v.toFixed(0) });
+  const missed = red.types.flatMap(t => t.missed.map(mm => `${t.type} · ${mm}`));
+  $("r-missed").innerHTML = missed.length ? `<details><summary>${missed.length} missed value(s)</summary><ul class="small">${missed.map(x => `<li>${esc(x)}</li>`).join("")}</ul></details>` : "";
+}
+function renderEffort() {
+  const e = D.effort || {}; const items = Object.entries(e.by_phase || {}).map(([k, v]) => ({ k, v }));
+  $("e-sub").textContent = `${fmt(e.total_hours, 1)} h in ${e.entries || 0} entries (hours_log.csv), by phase.`;
+  hbars($("c-effort"), items, { max: Math.max(1, ...items.map(i => i.v)) * 1.1, unit: " h" });
+}
+function renderCost() {
+  const vols = D.volumes || [];
+  $("t-cost").innerHTML = `<thead><tr><th>Model</th>${vols.map(v => `<th class="num">@ ${v.toLocaleString("en")}/month</th>`).join("")}<th class="num">Fixed EUR / month</th><th class="num">Break-even vs pay-per-token cloud (replies/month)</th></tr></thead><tbody>` +
+    (D.costs || []).map(r => `<tr><td>${vlabel(r.variant)}</td>${vols.map(v => `<td class="num">${fmt(r["eur_per_1000@" + v])}</td>`).join("")}<td class="num">${fmt(r.fixed_eur_per_month)}</td><td class="num">${fmt(r.break_even_replies_per_month_vs_B, 0)}</td></tr>`).join("") + "</tbody>";
+}
+
+// ---------- explorer ----------
+let current = null;
+function renderExplorer(rows) {
+  const ids = uniq(rows.map(r => r.complaint_id));
+  if (!ids.includes(current)) current = ids[0] || null;
+  const C = D.complaints || {};
+  $("x-list").innerHTML = ids.map(id => { const r0 = rows.find(r => r.complaint_id === id);
+    return `<button type="button" role="option" aria-current="${id === current}" data-c="${esc(id)}"><b>${esc(id)}</b><br><span class="tag">${esc(r0.language)}</span><span class="tag">${esc(r0.type)}</span><span class="tag">${esc(r0.difficulty)}</span></button>`; }).join("") || `<p class="empty" style="padding:10px">Nothing matches.</p>`;
+  if (!current) { $("x-detail").innerHTML = ""; return; }
+  const c = C[current] || {}, rs = rows.filter(r => r.complaint_id === current);
+  let h = `<h3 style="margin-top:0">${esc(current)}</h3>`;
+  h += c.text ? `<div class="quote">${esc(c.text)}</div>` : `<p class="muted small">${c.redacted ? "Complaint text left out (real data; rerun with <code>--include-real-text</code> to embed it locally)." : "Complaint text not available (pass the dataset with --data)."}</p>`;
+  if (c.facts) h += `<details><summary>Customer facts</summary><pre class="small">${esc(JSON.stringify(c.facts, null, 2))}</pre></details>`;
+  if (c.pii_types && c.pii_types.length) h += `<p class="small muted">Annotated PII: ${c.pii_types.map(esc).join(", ")}</p>`;
+  h += `<div class="drafts">` + rs.map(r => {
+    const s = scoreOf(r), ov = overallOf(r);
+    const head = `<div class="dh"><b>${vlabel(r.variant)}</b></div>`;
+    const body = r.error ? `<p class="status fail"><span class="ico">✕</span>${esc(r.error)}</p>` : r.draft != null ? `<pre>${esc(r.draft)}</pre>` : `<p class="muted small">Draft text left out.</p>`;
+    const note = r.agent_note ? `<div class="note">${esc(r.agent_note)}</div>` : "";
+    const meta = `<div class="meta">${fmt(r.latency_s)} s · ${r.prompt_tokens ?? "?"} → ${r.completion_tokens ?? "?"} tokens${r.parse_ok ? "" : " · <b>output not valid JSON</b>"}` +
+      (s ? `<br>${F.scores === "human" ? "Human" : "Judge"}: overall <b>${fmt(ov)}</b> · ${CRIT.map(k => `${k.split("_")[0]} ${fmt(s.scores[k], 1)}`).join(" · ")}${s.hallucination ? " · <b>hallucination flagged</b>" : ""}` : "") + "</div>";
+    return `<div class="draft">${head}${body}${note}${meta}</div>`;
+  }).join("") + `</div>`;
+  $("x-detail").innerHTML = h;
+}
+$("x-list").addEventListener("click", (e) => { const b = e.target.closest("[data-c]"); if (!b) return; current = b.dataset.c; renderExplorer(filtered()); });
+
+// ---------- render ----------
+function renderAll() {
+  const rows = filtered();
+  $("f-count").textContent = `${rows.length} of ${R.length} drafts`;
+  renderGates(); renderLatency(rows); renderQuality(rows); renderHeat(rows); renderRedaction(); renderEffort(); renderCost(); renderExplorer(rows);
+}
+$("footer").innerHTML = `Generated by <code>cexp report --html</code>. Method, metrics and caveats: <code>docs/experiment.md</code>. ` +
+  (m.include_real_text ? "<b>This file contains real complaint text: do not share it.</b>" : "Real complaint text is not embedded in this file; synthetic complaints and their drafts are.");
+let rz; addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 150); });
+renderAll();
+})();
+</script>
+</body>
+</html>

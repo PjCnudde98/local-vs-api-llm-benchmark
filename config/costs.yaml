@@ -1,0 +1,31 @@
+# Inputs for "cost per 1,000 replies". Leave a value null until you have the
+# real number; the report then prints n/a instead of a made-up figure.
+
+volumes_per_month: [1000, 50000]
+
+# Cloud: list price per 1M tokens (EUR). Fill in from the Azure price list.
+cloud:
+  A: {input_per_1m: null, output_per_1m: null}
+  B: {input_per_1m: null, output_per_1m: null}
+  E:                                   # GPU VM billed per hour, not per token
+    vm_eur_per_hour: null
+    hours_per_month: 730
+
+# Local: hardware amortised, power, ops hours.
+local:
+  C:
+    hardware_eur: null
+    amortisation_months: 36
+    power_watts: 350
+    eur_per_kwh: 0.30
+    hours_per_month: 730
+    ops_hours_per_month: 4
+    eur_per_ops_hour: 80
+  D:
+    hardware_eur: null
+    amortisation_months: 36
+    power_watts: 60
+    eur_per_kwh: 0.30
+    hours_per_month: 730
+    ops_hours_per_month: 1
+    eur_per_ops_hour: 80

@@ -1,0 +1,28 @@
+# Decision thresholds, fixed before any results are seen (plan, "Gates").
+# Human-readable version with rationale: docs/gates.md. Keep both in sync and
+# never edit a threshold after results are in: add a note to docs/gates.md instead.
+#
+# `cexp report` evaluates every gate it has data for. A gate shows
+# "not measured" until the data exists.
+
+quality:
+  rubric_mean_min: 4.0            # 1-5 rubric average, blind scoring
+  pairwise_local_win_or_tie_min: 0.40   # not built yet: always "not measured"
+  hallucination_rate_max: 0.02    # strictly below
+  edit_minutes_median_max: 2.0    # strictly below; human scores only
+
+privacy:
+  redaction_recall_min: 0.98      # per direct-identifier type, latest redaction-eval
+  direct_identifier_types: [PERSON, LOCATION, EMAIL, PHONE, IBAN, NATIONAL_ID]
+  redaction_quality_loss_max: 0.2 # rubric mean A minus B, strictly below
+
+operations:
+  p95_latency_s_max: 20           # strictly below
+
+# Variants the gates apply to. FAKE and other dry-run variants are reported but
+# not gated.
+gated_variants: [A, B, C, D, E]
+
+# Score source preference for quality gates: human scores when present,
+# otherwise the LLM judge (marked as such in the report).
+score_source_preference: [human, llm_judge]

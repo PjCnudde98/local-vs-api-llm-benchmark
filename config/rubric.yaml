@@ -1,0 +1,10 @@
+# Scoring rubric, shared by human reviewers and the LLM judge.
+scale: [1, 5]
+criteria:
+  factual_correctness: Uses only facts present in the complaint and customer facts; nothing invented.
+  policy_compliance: Offers only what the policy allows; declines out-of-policy requests politely.
+  tone_empathy: Acknowledges the customer's situation; calm, respectful, on-brand tone.
+  language_quality: Correct, natural wording in the complaint's language (no mixed languages).
+  completeness: Addresses every issue raised and states a clear next step.
+flags:
+  hallucination: true if the draft promises something outside policy or invents facts.
