@@ -1,79 +1,306 @@
-# One entry per experiment variant. Only model + hosting + PII handling differ;
-# prompt, policy, output format and generation settings are shared via `defaults`.
+# The experiment lineup: models x routes x reasoning modes.
 #
-# allow_real_data: false means the runner refuses to send real (historical)
-# complaints to that variant. Cloud variants must keep it false until the DPO
-# has seen redaction results (plan, "Test dataset").
+# A *variant* is one model, reached through one data-handling route, with
+# reasoning on or off. Variant keys are built as `<route>/<model>[+think]`:
+#   local/qwen3.6-27b          Qwen3.6-27B on the local GPU, thinking off
+#   local/qwen3.6-27b+think    same, thinking on
+#   pseudonymise/haiku-5.5     Claude Haiku 5.5 on pseudonymised text
+# `cexp variants` prints the full expanded list.
+#
+# Held constant across every variant (tests/test_config.py enforces it):
+# system prompt + policy, the task prompt of each tier, the user-message
+# layout, the output contract, max_tokens per tier and json_mode.
+# Allowed to differ: endpoint, model, reasoning switch, the token parameter name
+# and whether temperature can be sent (the Claude API and reasoning GPT models
+# reject it).
+#
+# Values like ${VAR:-default} come from .env; the default is used when the
+# variable is unset. Model ids for local servers are what your server calls
+# the model (Ollama tag, vLLM --served-model-name, llama-server --alias).
+# Reasoning switches differ per chat template: check each model card and adjust.
 
 defaults:
   temperature: 0.2
-  max_tokens: 800
-  token_param: max_tokens      # use max_completion_tokens for newer Azure models
   json_mode: true
+  token_param: max_tokens
+  max_tokens: 800
+  max_tokens_by_tier: {1: 300, 2: 500, 3: 900, 4: 1200, 5: 600, 6: 1500}  # per model turn
+  reasoning_extra_tokens: 6000   # added when reasoning is on, so thinking does not eat the answer
 
-variants:
-  A:
-    label: Frontier / Azure EU Data Zone / raw text
-    provider: azure
-    model: ${AZURE_DEPLOYMENT_FRONTIER}
+# Data-handling routes (plan: "Model lineup and routes" and "Data-handling routes and ZDR").
+routes:
+  local:          # R0: nothing leaves your infrastructure
+    pii: none
+    cloud: false
+    allow_real_data: true
+  pseudonymise:   # R3: identifiers replaced locally, then sent to the API
+    pii: pseudonymise
     cloud: true
+    allow_real_data: false
+  abstract:       # R2: pseudonymise, then a local model writes a neutral case summary; only that goes out
+    pii: abstract
+    cloud: true
+    allow_real_data: false
+    abstractor: ${ABSTRACTOR_VARIANT:-local/qwen3.6-27b}   # "best medium local model"; change after the first results
+  raw:            # R4/R5: raw text to the API, synthetic data only in this experiment
     pii: raw
+    cloud: true
     allow_real_data: false
+  own_tenant:     # R1: open model on a GPU VM in your own cloud subscription (optional:
+    pii: pseudonymise  # add `own_tenant` to a local model's routes and set base_url per route via .env)
+    cloud: true
+    allow_real_data: false
+    hardware: azure-gpu-vm
 
-  B:
-    label: Frontier / Azure private endpoint / pseudonymised
+models:
+  # -- cloud (API) --------------------------------------------------------------
+  sonnet-5.5:
+    label: Claude Sonnet 5.5
+    family: claude
+    size_class: cloud
+    provider: anthropic
+    model: claude-sonnet-5-5
+    hosting: Microsoft Foundry or Claude API
+    temperature: null            # the Claude API rejects temperature since 2026-10-21
+    routes: [pseudonymise, abstract, raw]
+    reasoning:
+      off: {thinking: {type: between_tools}, effort: high}   # Sonnet 5.5 cannot send {type: disabled}
+      on: {thinking: {type: adaptive}, effort: high}
+
+  haiku-5.5:
+    label: Claude Haiku 5.5
+    family: claude
+    size_class: cloud
+    provider: anthropic
+    model: claude-haiku-5-5
+    hosting: Microsoft Foundry or Claude API
+    temperature: null
+    routes: [pseudonymise, abstract, raw]
+    reasoning:
+      off: {thinking: {type: disabled}, effort: high}
+      on: {thinking: {type: adaptive}, effort: high}
+
+  gpt:
+    label: ${AZURE_DEPLOYMENT_GPT_LABEL:-GPT (Azure mid tier)}
+    family: gpt
+    size_class: cloud
     provider: azure
-    model: ${AZURE_DEPLOYMENT_FRONTIER}
-    cloud: true
-    pii: pseudonymise
-    allow_real_data: false
+    model: ${AZURE_DEPLOYMENT_GPT}
+    hosting: Azure EU Data Zone Standard
+    temperature: null            # reasoning GPT models reject temperature
+    token_param: max_completion_tokens
+    routes: [pseudonymise, abstract, raw]
+    reasoning:
+      off: {reasoning_effort: none}
+      on: {reasoning_effort: medium}
 
-  C:
-    label: Mid-size open model / local GPU
+  # -- XL local: the >128 GB server (512 GB RAM + GPUs), MoE experts offloaded to RAM ----
+  # The best open-weight model per family that fits; one is loaded at a time, so
+  # run them one after another. Sizes, quant choices and serving: docs/models.md.
+  glm-5.3:
+    label: GLM-5.3
+    family: glm
+    size_class: xl
     provider: openai_compatible
-    base_url: ${LOCAL_MID_BASE_URL}
-    model: ${LOCAL_MID_MODEL}
-    cloud: false
-    pii: none
-    allow_real_data: true
+    base_url: ${XL_SERVER_BASE_URL:-http://localhost:8080/v1}
+    model: ${XL_GLM_MODEL:-glm-5.3}
+    hosting: XL server, UD-Q4_K_XL GGUF (467 GB)
+    hardware: xl-server-512gb
+    routes: [local]
+    reasoning:                     # GLM-5.3 cannot switch thinking off: "low" is the closest (default is "max")
+      off: {extra_body: {chat_template_kwargs: {reasoning_effort: low, clear_thinking: true}}}
+      on: {extra_body: {chat_template_kwargs: {reasoning_effort: high, clear_thinking: true}}}
 
-  D:
-    label: Small open model / laptop
+  deepseek-v4.1-flash:
+    label: DeepSeek-V4.1-Flash-1017
+    family: deepseek
+    size_class: xl
     provider: openai_compatible
-    base_url: ${LOCAL_SMALL_BASE_URL}
-    model: ${LOCAL_SMALL_MODEL}
-    reasoning_effort: none     # qwen3 thinks by default; thinking eats max_tokens
-    cloud: false
-    pii: none
-    allow_real_data: true
+    base_url: ${XL_SERVER_BASE_URL:-http://localhost:8080/v1}
+    model: ${XL_DEEPSEEK_MODEL:-deepseek-v4.1-flash}
+    hosting: XL server, UD-Q4_K_XL GGUF (501 GB; needs GPU memory on top of RAM)
+    hardware: xl-server-512gb
+    routes: [local]
+    reasoning:                     # no Jinja template ships; check your server's DeepSeek-V4 switch
+      off: {extra_body: {chat_template_kwargs: {thinking: false}}}
+      on: {extra_body: {chat_template_kwargs: {thinking: true}}}
 
-  E:                            # optional: variant C model on own Azure GPU VM
-    label: Mid-size open model / GPU VM in own Azure subscription
+  kimi-k2.6:
+    label: Kimi K2.6
+    family: kimi
+    size_class: xl
     provider: openai_compatible
-    base_url: ${AZURE_VM_BASE_URL}
-    model: ${LOCAL_MID_MODEL}
-    cloud: true
-    pii: pseudonymise
-    allow_real_data: false
+    base_url: ${XL_SERVER_BASE_URL:-http://localhost:8080/v1}
+    model: ${XL_KIMI_MODEL:-kimi-k2.6}
+    hosting: XL server, UD-Q2_K_XL GGUF (340 GB; native INT4 is 595 GB)
+    hardware: xl-server-512gb
+    routes: [local]
+    reasoning:                     # "instant mode" per the model card
+      off: {extra_body: {chat_template_kwargs: {thinking: false}}}
+      on: {extra_body: {chat_template_kwargs: {thinking: true}}}
 
-  # Smoke-test variant: no model, no network. Use `cexp run --variants FAKE`.
+  qwen3.8-flash-next:
+    label: Qwen3.8-Flash-Next
+    family: qwen
+    size_class: xl
+    provider: openai_compatible
+    base_url: ${XL_SERVER_BASE_URL:-http://localhost:8080/v1}
+    model: ${XL_QWEN_MODEL:-qwen3.8-flash-next}
+    hosting: XL server, Q8_0 GGUF (188 GB)
+    hardware: xl-server-512gb
+    routes: [local]
+    reasoning:
+      off: {extra_body: {chat_template_kwargs: {enable_thinking: false}}}
+      on: {extra_body: {chat_template_kwargs: {enable_thinking: true}}}
+
+  # -- large local ----------------------------------------------------------------------
+  mistral-small-4:
+    label: Mistral Small 4
+    family: mistral
+    size_class: large
+    provider: openai_compatible
+    base_url: ${LOCAL_LARGE_BASE_URL:-http://localhost:8000/v1}
+    model: ${LOCAL_MISTRAL_SMALL_4_MODEL:-mistral-small-4}
+    hosting: 80 GB+ GPU or two GPUs
+    hardware: gpu-80gb
+    routes: [local]
+    reasoning:
+      off: {reasoning_effort: none}
+      on: {reasoning_effort: high}
+
+  # -- medium local ---------------------------------------------------------------------
+  qwen3.6-27b:
+    label: Qwen3.6-27B
+    family: qwen
+    size_class: medium
+    provider: openai_compatible
+    base_url: ${LOCAL_GPU_BASE_URL:-http://localhost:8000/v1}
+    model: ${LOCAL_QWEN36_27B_MODEL:-qwen3.6:27b}
+    hosting: one 24-48 GB GPU
+    hardware: gpu-48gb
+    routes: [local]
+    reasoning:
+      off: {extra_body: {chat_template_kwargs: {enable_thinking: false}}}
+      on: {extra_body: {chat_template_kwargs: {enable_thinking: true}}}
+
+  gemma-4-26b-a4b:
+    label: Gemma 4 26B A4B
+    family: gemma
+    size_class: medium
+    provider: openai_compatible
+    base_url: ${LOCAL_GPU_BASE_URL:-http://localhost:8000/v1}
+    model: ${LOCAL_GEMMA4_26B_MODEL:-gemma4:26b}
+    hosting: one 24 GB GPU
+    hardware: gpu-48gb
+    routes: [local]
+    reasoning:
+      off: {extra_body: {chat_template_kwargs: {enable_thinking: false}}}
+      on: {extra_body: {chat_template_kwargs: {enable_thinking: true}}}
+
+  gpt-oss-20b:
+    label: gpt-oss-20b
+    family: gpt-oss
+    size_class: medium
+    provider: openai_compatible
+    base_url: ${LOCAL_GPU_BASE_URL:-http://localhost:8000/v1}
+    model: ${LOCAL_GPT_OSS_MODEL:-gpt-oss:20b}
+    hosting: one 16-24 GB GPU
+    hardware: gpu-48gb
+    routes: [local]
+    reasoning:                     # gpt-oss always reasons; "low" is the closest to off
+      off: {reasoning_effort: low}
+      on: {reasoning_effort: high}
+
+  mistral-small-3.2:               # not in the plan's lineup: the 24B model already on the laptop (no thinking mode)
+    label: Mistral Small 3.2
+    family: mistral
+    size_class: medium
+    provider: openai_compatible
+    base_url: ${LOCAL_SMALL_BASE_URL:-http://localhost:11434/v1}
+    model: ${LOCAL_MISTRAL_SMALL_32_MODEL:-mistral-small3.2}
+    hosting: laptop (Ollama)
+    hardware: laptop
+    routes: [local]
+
+  # -- small local ----------------------------------------------------------------------
+  gemma-4-12b:
+    label: Gemma 4 12B
+    family: gemma
+    size_class: small
+    provider: openai_compatible
+    base_url: ${LOCAL_SMALL_BASE_URL:-http://localhost:11434/v1}
+    model: ${LOCAL_GEMMA4_12B_MODEL:-gemma4:12b}
+    hosting: 16 GB GPU or fast CPU
+    hardware: laptop
+    routes: [local]
+    reasoning:
+      off: {extra_body: {chat_template_kwargs: {enable_thinking: false}}}
+      on: {extra_body: {chat_template_kwargs: {enable_thinking: true}}}
+
+  qwen3-8b:
+    label: Qwen3 8B
+    family: qwen
+    size_class: small
+    provider: openai_compatible
+    base_url: ${LOCAL_SMALL_BASE_URL:-http://localhost:11434/v1}
+    model: ${LOCAL_SMALL_MODEL:-qwen3:8b}
+    hosting: 16 GB GPU or fast CPU
+    hardware: laptop
+    routes: [local]
+    reasoning:
+      off: {reasoning_effort: none}   # Ollama's switch; vLLM uses chat_template_kwargs.enable_thinking
+      on: {reasoning_effort: high}
+
+# Variants that are not a model x route product.
+variants:
+  # Hybrid route: a local model classifies complexity; easy complaints stay
+  # local, hard ones go to an API with preprocessing. Set `easy` to the best
+  # local model and `hard` to the cheapest API variant that passes the hard
+  # tiers once those results are in.
+  hybrid/default:
+    kind: hybrid
+    label: Hybrid / local router
+    router: local/qwen3.6-27b      # answers "easy" or "hard" for draft tiers
+    easy: local/qwen3.6-27b
+    hard: pseudonymise/haiku-5.5
+    hard_tiers: [5, 6]             # always sent to `hard`
+    router_tiers: [3, 4]           # the router decides; other tiers go to `easy`
+
+  # Smoke-test variant: no model, no network. `cexp run --variants FAKE`.
   FAKE:
     label: Deterministic fake model for dry runs
     provider: fake
     model: fake-1
+    size_class: none
+    route: local
     cloud: false
     pii: none
     allow_real_data: true
 
-# LLM judge. Must not be the same model as the variant being judged, and use
-# another model family than variant A where possible (plan, "Risks").
-judge:
-  label: LLM judge
-  provider: azure
-  model: ${AZURE_DEPLOYMENT_JUDGE}
-  cloud: true
-  pii: raw
-  allow_real_data: false
-  temperature: 0.0
-  max_tokens: 600
-  json_mode: true
+# LLM judges for the rubric (tiers 3, 4, 6). A judge never scores its own
+# model. Judges favour their own family, so use both and compare
+# (`cexp judge --judge JUDGE` and `--judge JUDGE_GPT`).
+judges:
+  JUDGE:
+    label: LLM judge (Claude Opus 5.5)
+    provider: anthropic
+    model: ${JUDGE_CLAUDE_MODEL:-claude-opus-5-5}
+    temperature: null
+    cloud: true
+    pii: raw
+    allow_real_data: false
+    max_tokens: 8000               # Opus 5.5 always thinks; thinking counts against max_tokens
+    json_mode: true
+    request: {effort: medium}
+  JUDGE_GPT:
+    label: LLM judge (GPT)
+    provider: azure
+    model: ${AZURE_DEPLOYMENT_JUDGE}
+    temperature: null
+    token_param: max_completion_tokens
+    cloud: true
+    pii: raw
+    allow_real_data: false
+    max_tokens: 2000
+    json_mode: true
+    request: {reasoning_effort: low}

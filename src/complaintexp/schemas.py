@@ -6,6 +6,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .tiers import TIERS, validate_gold
+
 SOURCES = {"synthetic", "real"}
 LANGUAGES = {"nl", "fr", "en"}
 
@@ -15,13 +17,17 @@ class Complaint:
     id: str
     source: str  # "synthetic" | "real"
     language: str  # nl | fr | en
-    text: str
+    text: str  # the complaint; for tier 6 the whole email thread
+    tier: int = 0  # 1-6, see tiers.TIERS
     type: str = ""  # delivery, damage, billing, refund, staff, repeat
     difficulty: str = ""  # simple, angry, rambling, multi_issue, legal, out_of_policy
     facts: dict = field(default_factory=dict)  # structured customer facts
     # Hand-annotated PII: [{"type": "PERSON", "text": "Jan Peeters"}, ...].
     # Annotated by text (not offsets) so it survives light edits of the complaint.
     pii: list[dict] = field(default_factory=list)
+    gold: dict = field(default_factory=dict)  # tier-specific answer key, see tiers.validate_gold
+    tool_data: dict = field(default_factory=dict)  # tier 5: what the lookup tools return
+    context_docs: list[str] = field(default_factory=list)  # tier 6: retrieved policy pages
     gold_reply: str | None = None  # experienced agent's reply, ~30 complaints
     sent_reply: str | None = None  # real set: reply the agent actually sent
 
@@ -44,7 +50,7 @@ def load_dataset(*paths: Path) -> list[Complaint]:
                 raw = json.loads(line)
             except json.JSONDecodeError as e:
                 raise ValueError(f"invalid JSON ({where}): {e.msg}") from e
-            missing = [k for k in ("id", "source", "language", "text") if not raw.get(k)]
+            missing = [k for k in ("id", "source", "language", "text", "tier") if not raw.get(k)]
             if missing:
                 raise ValueError(f"missing required field(s) {missing} ({where})")
             c = Complaint.from_dict(raw)
@@ -54,10 +60,15 @@ def load_dataset(*paths: Path) -> list[Complaint]:
                 raise ValueError(f"bad source {c.source!r} for {c.id} ({where})")
             if c.language not in LANGUAGES:
                 raise ValueError(f"bad language {c.language!r} for {c.id} ({where})")
+            if c.tier not in TIERS:
+                raise ValueError(f"bad tier {c.tier!r} for {c.id}: use 1-6 ({where})")
             if not isinstance(c.pii, list) or any(
                 not isinstance(p, dict) or not p.get("type") or not p.get("text") for p in c.pii
             ):
                 raise ValueError(f"pii must be a list of {{type, text}} objects ({where})")
+            problems = validate_gold(c)
+            if problems:
+                raise ValueError(f"{c.id}: {'; '.join(problems)} ({where})")
             seen.add(c.id)
             items.append(c)
     return items

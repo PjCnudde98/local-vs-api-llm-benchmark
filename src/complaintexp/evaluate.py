@@ -15,10 +15,11 @@ from .config import load_rubric
 from .prompting import normalise_for_blind
 from .pseudonymise import Pseudonymiser
 from .schemas import Complaint
+from .tiers import DRAFT_TIERS
 
 
 # -- privacy: redaction recall ------------------------------------------------
-def _leaks(value: str, redacted: str) -> bool:
+def leaks(value: str, redacted: str) -> bool:
     """True if the value, or any identifying part of it, survives redaction.
 
     Partial leaks count: "Kerkstraat 12, 9000 Gent" with only "Gent" redacted still
@@ -36,7 +37,7 @@ def redaction_recall(complaints: list[Complaint], ps: Pseudonymiser) -> dict[str
     """Per PII type: share of hand-annotated values that no longer appear after redaction.
 
     A value counts as leaked if it, or any identifying part of it, is still
-    present (case-insensitive) in the redacted text; see `_leaks`. Only
+    present (case-insensitive) in the redacted text; see `leaks`. Only
     complaints with a `pii` annotation are scored.
     """
     total: dict[str, int] = defaultdict(int)
@@ -49,7 +50,7 @@ def redaction_recall(complaints: list[Complaint], ps: Pseudonymiser) -> dict[str
         for ann in c.pii:
             t, value = ann["type"], ann["text"]
             total[t] += 1
-            if _leaks(value, redacted):
+            if leaks(value, redacted):
                 leaked[t] += 1
                 misses[t].append(f"{c.id}: {value}")
     return {
@@ -87,13 +88,17 @@ def export_blind(
     variants: list[str] | None = None,
     seed: int = 42,
 ) -> int:
-    """Write a shuffled review sheet (no variant labels) plus a separate key file."""
+    """Write a shuffled review sheet (no variant labels) plus a separate key file.
+
+    Only draft tiers (3, 4, 6) are exported: tiers 1, 2 and 5 are scored automatically.
+    """
     rubric = load_rubric()
     by_id = {c.id: c for c in complaints}
     rng = random.Random(seed)
-    vfilter, vargs = "", []
+    vfilter = f" AND (tier IS NULL OR tier IN ({','.join(str(t) for t in DRAFT_TIERS)}))"
+    vargs: list = []
     if variants:
-        vfilter = f" AND variant IN ({','.join('?' * len(variants))})"
+        vfilter += f" AND variant IN ({','.join('?' * len(variants))})"
         vargs = list(variants)
     ids = sorted(
         r[0] for r in con.execute(
@@ -117,12 +122,12 @@ def export_blind(
     ) as k:
         w = csv.writer(f)
         kw = csv.writer(k)
-        w.writerow(["blind_id", "language", "complaint", "draft", *criteria, "hallucination(0/1)", "edit_minutes"])
+        w.writerow(["blind_id", "language", "tier", "complaint", "draft", *criteria, "hallucination(0/1)", "edit_minutes"])
         kw.writerow(["blind_id", "complaint_id", "variant"])
         for i, (cid, variant, draft) in enumerate(rows, 1):
             bid = f"B{i:04d}"
             c = by_id[cid]
-            w.writerow([bid, c.language, c.text, draft, *[""] * (len(criteria) + 2)])
+            w.writerow([bid, c.language, c.tier, c.text, draft, *[""] * (len(criteria) + 2)])
             kw.writerow([bid, cid, variant])
     return len(rows)
 

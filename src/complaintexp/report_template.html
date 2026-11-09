@@ -126,8 +126,20 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1
     <div class="table-wrap"><table id="gates"></table></div>
   </section>
 
+  <section class="card" id="frontier-card">
+    <div class="card-head">
+      <div><h2>Capability frontier</h2><p class="sub small">Main metric of each tier as a share of its pass threshold (100% = threshold). The first tier below the line is where a model breaks. Computed on all data, not the filters below.</p></div>
+      <label class="small muted">Size class <select id="fr-size"><option value="">All</option></select></label>
+    </div>
+    <div class="legend" id="fr-legend"></div>
+    <div class="chart" id="c-frontier"></div>
+    <div class="table-wrap"><table id="t-frontier"></table></div>
+  </section>
+
   <div class="filters" id="filters" role="group" aria-label="Filters">
     <div class="chips" id="f-variants" aria-label="Models"></div>
+    <label>Tier <select id="f-tier"></select></label>
+    <label>Route <select id="f-route"></select></label>
     <label>Language <select id="f-language"></select></label>
     <label>Type <select id="f-type"></select></label>
     <label>Difficulty <select id="f-difficulty"></select></label>
@@ -154,7 +166,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1
     <div class="card-head">
       <div><h2>Breakdown</h2><p class="sub small">Darker is higher. Hover a cell for the sample size.</p></div>
       <div class="filters" style="position:static;border:0;padding:0;background:none">
-        <label>Rows <select id="b-dim"><option value="language">Language</option><option value="type">Complaint type</option><option value="difficulty">Difficulty</option></select></label>
+        <label>Rows <select id="b-dim"><option value="tier">Tier</option><option value="route">Route</option><option value="language">Language</option><option value="type">Complaint type</option><option value="difficulty">Difficulty</option></select></label>
         <label>Metric <select id="b-metric"><option value="overall">Rubric average</option><option value="p50">p50 latency (s)</option><option value="fail">Failure rate</option></select></label>
       </div>
     </div>
@@ -176,8 +188,8 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1
   </div>
 
   <section class="card">
-    <h2>Cost per 1,000 replies (EUR)</h2>
-    <p class="sub small">From <code>config/costs.yaml</code>. n/a means the input is still empty.</p>
+    <h2>Cost (EUR)</h2>
+    <p class="sub small">From <code>config/costs.yaml</code> and measured tokens, throughput and edit time. Per sendable reply = model cost + agent edit time. n/a means an input is still empty.</p>
     <div class="table-wrap"><table id="t-cost"></table></div>
   </section>
 
@@ -225,11 +237,15 @@ function bootstrap(vals, n = 2000) {
 const uniq = (a) => [...new Set(a)].sort();
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
-// Colour follows the variant, never its rank or the filter state.
-const ORDER = ["A", "B", "C", "D", "E", "FAKE"];
-const ALLV = uniq(R.map(r => r.variant)).sort((a, b) => (ORDER.indexOf(a) + 1 || 99) - (ORDER.indexOf(b) + 1 || 99) || a.localeCompare(b));
-const SLOT = {}; ALLV.forEach((v, i) => { const k = ORDER.indexOf(v); SLOT[v] = `var(--s${(k >= 0 ? (v === "FAKE" ? 7 : k + 1) : Math.min(8, ORDER.length + i)) })`; });
-const colour = (v) => SLOT[v] || "var(--s8)";
+// Colour follows the size class (cloud, xl, large, medium, small, hybrid), never rank or filter state.
+const META = D.variant_meta || {};
+const SIZE_ORDER = ["cloud", "xl", "large", "medium", "small", "hybrid", "none"];
+const SIZE_SLOT = { cloud: 1, xl: 7, large: 2, medium: 3, small: 4, hybrid: 5, none: 8 };
+const sizeOf = (v) => (META[v] && META[v].size_class) || (R.find(r => r.variant === v) || {}).size_class || "none";
+const ALLV = uniq([...R.map(r => r.variant), ...Object.keys(META)]).sort((a, b) =>
+  (SIZE_ORDER.indexOf(sizeOf(a)) + 1 || 99) - (SIZE_ORDER.indexOf(sizeOf(b)) + 1 || 99) || a.localeCompare(b));
+const colour = (v) => `var(--s${SIZE_SLOT[sizeOf(v)] || 8})`;
+const isThink = (v) => (META[v] && META[v].reasoning === "on") || /\+think$/.test(v);
 const sw = (v) => `<span class="sw" style="background:${colour(v)}"></span>`;
 const NAMES = D.names || {};
 const name = (v) => NAMES[v] || v;
@@ -265,7 +281,7 @@ $("subtitle").textContent = `Report generated ${(m.generated_at || "").replace("
 const gc = { pass: 0, fail: 0, not_measured: 0 }; GATES.forEach(g => gc[g.status]++);
 const tiles = [
   ["Drafts", R.length, `${m.n_complaints || 0} complaints`],
-  ["Models", ALLV.length, ALLV.map(name).join(", ") || "none yet"],
+  ["Variants", ALLV.length, `${uniq(ALLV.map(sizeOf)).join(", ") || "none yet"}`],
   ["Gates passed", gc.pass, `of ${GATES.length}`],
   ["Gates failed", gc.fail, gc.fail ? "see table below" : "none"],
   ["Not measured", gc.not_measured, "missing data"],
@@ -298,12 +314,14 @@ $("gate-filter").addEventListener("click", (e) => {
 });
 
 // ---------- filters ----------
-const F = { variants: new Set(ALLV), language: "", type: "", difficulty: "", source: "", scores: "judge" };
+const F = { variants: new Set(ALLV), tier: "", route: "", language: "", type: "", difficulty: "", source: "", scores: "judge" };
 function fillSelect(id, key, label) {
-  const vals = uniq(R.map(r => r[key]));
+  const vals = uniq(R.map(r => String(r[key] ?? "unknown")));
   $(id).innerHTML = `<option value="">All ${label}</option>` + vals.map(v => `<option>${esc(v)}</option>`).join("");
   $(id).addEventListener("change", (e) => { F[key] = e.target.value; renderAll(); });
 }
+fillSelect("f-tier", "tier", "tiers");
+fillSelect("f-route", "route", "routes");
 fillSelect("f-language", "language", "languages");
 fillSelect("f-type", "type", "types");
 fillSelect("f-difficulty", "difficulty", "difficulties");
@@ -323,7 +341,7 @@ $("f-variants").addEventListener("click", (e) => {
 });
 document.addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && e.target.matches(".chip")) { e.preventDefault(); e.target.click(); } });
 
-const filtered = () => R.filter(r => F.variants.has(r.variant) && (!F.language || r.language === F.language) &&
+const filtered = () => R.filter(r => F.variants.has(r.variant) && (!F.tier || String(r.tier) === F.tier) && (!F.route || r.route === F.route) && (!F.language || r.language === F.language) &&
   (!F.type || r.type === F.type) && (!F.difficulty || r.difficulty === F.difficulty) && (!F.source || r.source === F.source));
 const visibleVariants = (rows) => ALLV.filter(v => F.variants.has(v) && rows.some(r => r.variant === v));
 const scoreOf = (r) => r[F.scores];
@@ -416,9 +434,9 @@ function renderQuality(rows) {
 // ---------- breakdown heat table ----------
 const SEQ = ["--seq-100", "--seq-200", "--seq-300", "--seq-400", "--seq-500", "--seq-600", "--seq-700"];
 function renderHeat(rows) {
-  const dim = $("b-dim").value, metric = $("b-metric").value, vs = visibleVariants(rows), vals = uniq(rows.map(r => r[dim]));
+  const dim = $("b-dim").value, metric = $("b-metric").value, vs = visibleVariants(rows), vals = uniq(rows.map(r => String(r[dim] ?? "unknown")));
   const cell = (v, k) => {
-    const rs = rows.filter(r => r.variant === v && r[dim] === k);
+    const rs = rows.filter(r => r.variant === v && String(r[dim] ?? "unknown") === k);
     if (metric === "overall") { const xs = rs.map(overallOf).filter(x => x != null); return { val: mean(xs), n: xs.length }; }
     if (metric === "p50") { const xs = rs.filter(r => !r.error && r.latency_s != null).map(r => r.latency_s); return { val: nearestRank(xs, .5), n: xs.length }; }
     return { val: rs.length ? rs.filter(r => r.error || !r.parse_ok).length / rs.length : null, n: rs.length };
@@ -471,8 +489,60 @@ function renderEffort() {
 }
 function renderCost() {
   const vols = D.volumes || [];
-  $("t-cost").innerHTML = `<thead><tr><th>Model</th>${vols.map(v => `<th class="num">@ ${v.toLocaleString("en")}/month</th>`).join("")}<th class="num">Fixed EUR / month</th><th class="num">Break-even vs pay-per-token cloud (replies/month)</th></tr></thead><tbody>` +
-    (D.costs || []).map(r => `<tr><td>${vlabel(r.variant)}</td>${vols.map(v => `<td class="num">${fmt(r["eur_per_1000@" + v])}</td>`).join("")}<td class="num">${fmt(r.fixed_eur_per_month)}</td><td class="num">${fmt(r.break_even_replies_per_month_vs_B, 0)}</td></tr>`).join("") + "</tbody>";
+  $("t-cost").innerHTML = `<thead><tr><th>Model</th>${vols.map(v => `<th class="num">Per 1,000 @ ${v.toLocaleString("en")}/mo</th>`).join("")}${vols.map(v => `<th class="num">Per sendable reply @ ${v.toLocaleString("en")}/mo</th>`).join("")}<th class="num">Fixed / month</th><th class="num">Replies / hour</th><th class="num">Break-even (replies/month)</th><th>Notes</th></tr></thead><tbody>` +
+    (D.costs || []).filter(r => F.variants.has(r.variant)).map(r => `<tr><td>${vlabel(r.variant)}</td>${vols.map(v => `<td class="num">${fmt(r["eur_per_1000@" + v])}${(r["servers@" + v] || 1) > 1 ? ` <span class="muted small">(${r["servers@" + v]} servers)</span>` : ""}</td>`).join("")}` +
+      `${vols.map(v => `<td class="num">${fmt(r["eur_per_sendable@" + v], 3)}</td>`).join("")}<td class="num">${fmt(r.fixed_eur_per_month)}</td><td class="num">${fmt(r.replies_per_hour, 0)}</td>` +
+      `<td class="num">${fmt(r.break_even_replies_per_month, 0)}${r.break_even_vs ? `<br><span class="small muted">vs ${esc(name(r.break_even_vs))}</span>` : ""}</td><td class="small muted">${esc((r.notes || []).join("; "))}</td></tr>`).join("") + "</tbody>";
+}
+
+// ---------- capability frontier ----------
+const FR = D.frontier || { cells: [], summary: [], tiers: {} };
+const FR_TIERS = Object.keys(FR.tiers || {}).map(Number).sort((a, b) => a - b);
+const frSizes = uniq(FR.cells.map(c => sizeOf(c.variant)));
+$("fr-size").innerHTML += frSizes.map(s => `<option>${esc(s)}</option>`).join("");
+$("fr-size").addEventListener("change", () => renderFrontier());
+const mval = (x) => x.value == null ? "n/a" : x.metric === "rubric_mean" ? fmt(x.value) : pct(x.value, 0);
+function renderFrontier() {
+  const el = $("c-frontier"), size = $("fr-size").value;
+  const vs = ALLV.filter(v => FR.cells.some(c => c.variant === v) && (!size || sizeOf(v) === size) && F.variants.has(v));
+  if (!FR.cells.length || !vs.length) { el.innerHTML = `<p class="empty">No tier results yet. Run <code>cexp run</code> on a dataset with tiers, then <code>cexp judge</code> for tiers 3, 4 and 6.</p>`; $("t-frontier").innerHTML = ""; $("fr-legend").innerHTML = ""; return; }
+  $("fr-legend").innerHTML = uniq(vs.map(sizeOf)).map(s => `<span><span class="sw" style="background:var(--s${SIZE_SLOT[s] || 8})"></span>${esc(s)}</span>`).join("") +
+    `<span><svg width="22" height="10"><line x1="1" y1="5" x2="21" y2="5" stroke="var(--text-secondary)" stroke-width="2" stroke-dasharray="4 3"/></svg>thinking on</span>`;
+  const W = el.clientWidth || 800, L = 48, Rm = 190, top = 16, H = 300, bottom = 40;
+  const ratios = FR.cells.filter(c => vs.includes(c.variant) && c.main_ratio != null).map(c => c.main_ratio);
+  const yMax = Math.max(1.1, ...ratios) * 1.02, yMin = Math.min(0.5, ...ratios, 1) * 0.98;
+  const x = (t) => L + (W - L - Rm) * (FR_TIERS.indexOf(t) / Math.max(1, FR_TIERS.length - 1));
+  const y = (r) => top + (H - top - bottom) * (1 - (r - yMin) / (yMax - yMin));
+  let s = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="Main metric per tier as share of threshold, one line per variant">`;
+  for (let g = Math.ceil(yMin * 10) / 10; g <= yMax; g += 0.1) s += `<line x1="${L}" x2="${W - Rm}" y1="${y(g)}" y2="${y(g)}" stroke="var(--grid)"/><text x="${L - 6}" y="${y(g) + 4}" text-anchor="end">${Math.round(g * 100)}%</text>`;
+  FR_TIERS.forEach(t => s += `<text x="${x(t)}" y="${H - 22}" text-anchor="middle" class="lbl">T${t}</text><text x="${x(t)}" y="${H - 8}" text-anchor="middle">${esc(FR.tiers[t])}</text>`);
+  s += `<line x1="${L}" x2="${W - Rm}" y1="${y(1)}" y2="${y(1)}" stroke="var(--critical)" stroke-width="1.5"/><text x="${W - Rm + 6}" y="${y(1) + 4}">threshold</text>`;
+  const ends = [];
+  vs.forEach(v => {
+    const pts = FR_TIERS.map(t => FR.cells.find(c => c.variant === v && c.tier === t)).filter(c => c && c.main_ratio != null);
+    if (!pts.length) return;
+    s += `<polyline fill="none" stroke="${colour(v)}" stroke-width="2" ${isThink(v) ? 'stroke-dasharray="5 4"' : ""} points="${pts.map(c => `${x(c.tier)},${y(c.main_ratio)}`).join(" ")}"/>`;
+    pts.forEach(c => {
+      const tipTxt = `<b>${esc(name(v))}</b> · T${c.tier} ${esc(FR.tiers[c.tier])}<br>${c.metrics.map(mm => `${esc(mm.metric.replace(/_/g, " "))}: ${mval(mm)} (${esc(mm.op)} ${mm.metric === "rubric_mean" ? mm.threshold : pct(mm.threshold, 0)})`).join("<br>")}<br>n=${c.n}${c.note ? "<br>" + esc(c.note) : ""}`;
+      s += `<circle cx="${x(c.tier)}" cy="${y(c.main_ratio)}" r="${c.status === "fail" ? 5 : 4}" fill="${c.status === "fail" ? "var(--surface-1)" : colour(v)}" stroke="${colour(v)}" stroke-width="2" data-tip="${tipTxt}"/>` +
+           `<circle cx="${x(c.tier)}" cy="${y(c.main_ratio)}" r="10" fill="transparent" data-tip="${tipTxt}"/>`;
+    });
+    const last = pts[pts.length - 1]; ends.push({ v, y: y(last.main_ratio), x: x(last.tier) });
+  });
+  ends.sort((a, b) => a.y - b.y); let prev = -1e9;
+  ends.forEach(e => { const yy = Math.max(e.y, prev + 13); prev = yy; s += `<text x="${W - Rm + 6}" y="${yy + 4}" fill="${colour(e.v)}" style="fill:${colour(e.v)}">${esc(name(e.v).slice(0, 30))}</text>`; });
+  el.innerHTML = s + "</svg>";
+  const summ = Object.fromEntries(FR.summary.map(x => [x.variant, x]));
+  const cell = (c) => {
+    if (!c || c.status === "not_measured") return `<td class="cell muted">–</td>`;
+    const [ico] = STATUS_LABEL[c.status];
+    const econ = Object.entries(c.economic || {}).filter(([, e]) => e && e.status === "fail").map(([vol]) => Number(vol).toLocaleString("en"));
+    const tipTxt = c.metrics.map(mm => `${esc(mm.metric.replace(/_/g, " "))}: ${mval(mm)}`).join("<br>") + `<br>n=${c.n}${c.score_source ? " · " + esc(c.score_source) : ""}` +
+      (econ.length ? `<br>economic failure at ${econ.join(", ")}/month` : "");
+    return `<td data-tip="${tipTxt}"><span class="status ${c.status}"><span class="ico" aria-hidden="true">${ico}</span>${c.metrics.map(mval).join(" / ")}</span>${econ.length ? `<br><span class="small" style="color:var(--critical)">econ. fail @ ${econ.join(", ")}</span>` : ""}${c.note ? `<br><span class="small muted">n=${c.n}</span>` : ""}</td>`;
+  };
+  $("t-frontier").innerHTML = `<thead><tr><th>Model</th>${FR_TIERS.map(t => `<th>T${t} ${esc(FR.tiers[t])}</th>`).join("")}<th>Breaks at</th></tr></thead><tbody>` +
+    vs.map(v => `<tr><td>${vlabel(v)}</td>${FR_TIERS.map(t => cell(FR.cells.find(c => c.variant === v && c.tier === t))).join("")}<td>${summ[v] && summ[v].breaks_at ? "T" + summ[v].breaks_at : "–"}</td></tr>`).join("") + "</tbody>";
 }
 
 // ---------- explorer ----------
@@ -482,19 +552,23 @@ function renderExplorer(rows) {
   if (!ids.includes(current)) current = ids[0] || null;
   const C = D.complaints || {};
   $("x-list").innerHTML = ids.map(id => { const r0 = rows.find(r => r.complaint_id === id);
-    return `<button type="button" role="option" aria-current="${id === current}" data-c="${esc(id)}"><b>${esc(id)}</b><br><span class="tag">${esc(r0.language)}</span><span class="tag">${esc(r0.type)}</span><span class="tag">${esc(r0.difficulty)}</span></button>`; }).join("") || `<p class="empty" style="padding:10px">Nothing matches.</p>`;
+    return `<button type="button" role="option" aria-current="${id === current}" data-c="${esc(id)}"><b>${esc(id)}</b><br><span class="tag">T${esc(r0.tier ?? "?")}</span><span class="tag">${esc(r0.language)}</span><span class="tag">${esc(r0.type)}</span><span class="tag">${esc(r0.difficulty)}</span></button>`; }).join("") || `<p class="empty" style="padding:10px">Nothing matches.</p>`;
   if (!current) { $("x-detail").innerHTML = ""; return; }
   const c = C[current] || {}, rs = rows.filter(r => r.complaint_id === current);
   let h = `<h3 style="margin-top:0">${esc(current)}</h3>`;
   h += c.text ? `<div class="quote">${esc(c.text)}</div>` : `<p class="muted small">${c.redacted ? "Complaint text left out (real data; rerun with <code>--include-real-text</code> to embed it locally)." : "Complaint text not available (pass the dataset with --data)."}</p>`;
   if (c.facts) h += `<details><summary>Customer facts</summary><pre class="small">${esc(JSON.stringify(c.facts, null, 2))}</pre></details>`;
+  if (c.gold && Object.keys(c.gold).length) h += `<details><summary>Gold answer</summary><pre class="small">${esc(JSON.stringify(c.gold, null, 2))}</pre></details>`;
   if (c.pii_types && c.pii_types.length) h += `<p class="small muted">Annotated PII: ${c.pii_types.map(esc).join(", ")}</p>`;
   h += `<div class="drafts">` + rs.map(r => {
     const s = scoreOf(r), ov = overallOf(r);
     const head = `<div class="dh"><b>${vlabel(r.variant)}</b></div>`;
     const body = r.error ? `<p class="status fail"><span class="ico">✕</span>${esc(r.error)}</p>` : r.draft != null ? `<pre>${esc(r.draft)}</pre>` : `<p class="muted small">Draft text left out.</p>`;
     const note = r.agent_note ? `<div class="note">${esc(r.agent_note)}</div>` : "";
-    const meta = `<div class="meta">${fmt(r.latency_s)} s · ${r.prompt_tokens ?? "?"} → ${r.completion_tokens ?? "?"} tokens${r.parse_ok ? "" : " · <b>output not valid JSON</b>"}` +
+    const auto = r.metrics ? Object.entries(r.metrics).map(([k, x]) => `${esc(k.replace(/_/g, " "))} ${typeof x === "number" && x <= 1 && !Number.isInteger(x) ? pct(x, 0) : esc(x)}`).join(" · ") : "";
+    const meta = `<div class="meta">${fmt(r.latency_s)} s · ${r.prompt_tokens ?? "?"} → ${r.completion_tokens ?? "?"} tokens${r.parse_ok ? "" : " · <b>answer does not match the output contract</b>"}` +
+      (r.routed_to ? `<br>routed to ${esc(name(r.routed_to))}` : "") + (r.tool_calls != null ? `<br>tool calls ${r.valid_tool_calls}/${r.tool_calls} valid` : "") +
+      (auto ? `<br>${auto}` : "") + (r.pii_leaked != null ? `<br>annotated PII visible in what was sent: ${r.pii_leaked} of ${r.pii_annotated}` : "") +
       (s ? `<br>${F.scores === "human" ? "Human" : "Judge"}: overall <b>${fmt(ov)}</b> · ${CRIT.map(k => `${k.split("_")[0]} ${fmt(s.scores[k], 1)}`).join(" · ")}${s.hallucination ? " · <b>hallucination flagged</b>" : ""}` : "") + "</div>";
     return `<div class="draft">${head}${body}${note}${meta}</div>`;
   }).join("") + `</div>`;
@@ -506,7 +580,7 @@ $("x-list").addEventListener("click", (e) => { const b = e.target.closest("[data
 function renderAll() {
   const rows = filtered();
   $("f-count").textContent = `${rows.length} of ${R.length} drafts`;
-  renderGates(); renderLatency(rows); renderQuality(rows); renderHeat(rows); renderRedaction(); renderEffort(); renderCost(); renderExplorer(rows);
+  renderGates(); renderFrontier(); renderLatency(rows); renderQuality(rows); renderHeat(rows); renderRedaction(); renderEffort(); renderCost(); renderExplorer(rows);
 }
 $("footer").innerHTML = `Generated by <code>cexp report --html</code>. Method, metrics and caveats: <code>docs/experiment.md</code>. ` +
   (m.include_real_text ? "<b>This file contains real complaint text: do not share it.</b>" : "Real complaint text is not embedded in this file; synthetic complaints and their drafts are.");

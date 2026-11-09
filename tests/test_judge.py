@@ -90,3 +90,48 @@ def test_parse_judgement_accepts_bool_hallucination():
 def test_parse_judgement_ignores_extra_criteria():
     scores, _ = parse_judgement(json.dumps({"scores": {**{c: 3 for c in CRIT}, "style": 9}}), CRIT, 1, 5)
     assert set(scores) == set(CRIT)
+
+
+# -- tiers ------------------------------------------------------------------------
+def test_only_draft_tiers_are_judged(con, sample):
+    for c in sample:
+        insert_run(con, "C", c.id, tier=c.tier)
+    client = ScriptedClient([verdict()])
+    n = judge_variant("C", sample, con, variants=variants(), client=client, **quiet)
+    assert n == sum(c.tier in (3, 4) for c in sample)  # tier 6 needs key-fact output, see below
+
+
+def test_long_context_judgement_stores_consistency_and_missed_facts(con, sample):
+    (c,) = [x for x in sample if x.tier == 6]
+    insert_run(con, "C", c.id, tier=6)
+    raw = json.dumps({**json.loads(verdict()), "consistent": 0, "missed_facts": [2, 4]})
+    client = ScriptedClient([raw])
+    assert judge_variant("C", [c], con, variants=variants(), client=client, **quiet) == 1
+    system, user = client.calls[0]
+    assert "missed_facts" in system and "# Key facts\n1. " in user
+    extra = json.loads(con.execute("SELECT extra_json FROM judgements").fetchone()[0])
+    assert extra == {"consistent": 0, "missed_facts": [2, 4], "n_key_facts": len(c.gold["key_facts"])}
+
+
+def test_long_context_judgement_with_bad_fact_numbers_is_skipped(con, sample):
+    (c,) = [x for x in sample if x.tier == 6]
+    insert_run(con, "C", c.id, tier=6)
+    raw = json.dumps({**json.loads(verdict()), "consistent": 1, "missed_facts": [99]})
+    logs = []
+    assert judge_variant("C", [c], con, variants=variants(), client=ScriptedClient([raw]), log=logs.append) == 0
+    assert "missed_facts" in logs[0]
+
+
+def test_judge_can_be_chosen(con, sample):
+    vs = {**variants(), "JUDGE_GPT": make_variant("JUDGE_GPT", model="gpt-judge")}
+    insert_run(con, "C", sample[0].id, tier=sample[0].tier)
+    judge_variant("C", sample, con, variants=vs, client=ScriptedClient([verdict()]), judge_key="JUDGE_GPT", **quiet)
+    assert con.execute("SELECT judge_model FROM judgements").fetchone()[0] == "gpt-judge"
+
+
+def test_hybrid_is_not_judged_by_a_model_it_routes_to(con, sample):
+    vs = {"H": make_variant("H", route="hybrid", hybrid={"easy": "E", "hard": "C"}),
+          "E": make_variant("E", model="easy-model"), "C": make_variant("C", model="judge-1"),
+          "JUDGE": make_variant("JUDGE", model="judge-1")}
+    with pytest.raises(ValueError, match="never judge itself"):
+        judge_variant("H", sample, con, variants=vs, client=ScriptedClient(), **quiet)

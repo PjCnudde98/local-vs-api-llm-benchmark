@@ -70,3 +70,76 @@ def test_completion_reports_usage_and_served_model():
     out = _client().complete("S", "U")
     assert (out.prompt_tokens, out.completion_tokens, out.model_id) == (11, 7, "served-model")
     assert out.latency_s >= 0 and json.loads(out.text)
+
+
+def test_max_tokens_follow_the_tier_and_grow_when_reasoning_is_on():
+    c = _client(max_tokens_by_tier={1: 300, 4: 1200}, reasoning_extra_tokens=5000)
+    c.complete("S", "U", tier=1)
+    assert c._client.kwargs["max_tokens"] == 300
+    t = _client(max_tokens_by_tier={1: 300}, reasoning_extra_tokens=5000, reasoning="on")
+    t.complete("S", "U", tier=1)
+    assert t._client.kwargs["max_tokens"] == 5300
+
+
+def test_reasoning_mode_request_is_sent_as_extra_body():
+    c = _client(request={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}})
+    c.complete("S", "U")
+    assert c._client.kwargs["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+def test_temperature_none_is_not_sent():
+    c = _client(temperature=None)
+    c.complete("S", "U")
+    assert "temperature" not in c._client.kwargs
+
+
+def test_chat_sends_the_whole_conversation():
+    c = _client()
+    c.chat("S", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"},
+                 {"role": "user", "content": "c"}])
+    assert [m["content"] for m in c._client.kwargs["messages"]] == ["S", "a", "b", "c"]
+
+
+# -- Claude (Anthropic SDK) -------------------------------------------------------
+class _AnthropicRecorder:
+    def __init__(self):
+        self.kwargs = None
+        self.messages = SimpleNamespace(create=self._create)
+
+    def _create(self, **kwargs):
+        self.kwargs = kwargs
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="thinking", thinking=""), SimpleNamespace(type="text", text='{"a": 1}')],
+            usage=SimpleNamespace(input_tokens=21, output_tokens=9), model="claude-haiku-5-5")
+
+
+def _claude(**kw):
+    c = LLMClient(make_variant(provider="fake", **kw))  # no SDK client is built for `fake`
+    c.v.provider = "anthropic"
+    c._client = _AnthropicRecorder()
+    return c
+
+
+def test_claude_request_never_sends_temperature_and_maps_reasoning():
+    c = _claude(model="claude-sonnet-5-5", temperature=0.2, max_tokens_by_tier={3: 900},
+                request={"thinking": {"type": "between_tools"}, "effort": "high"})
+    out = c.complete("S", "U", tier=3)
+    k = c._client.kwargs
+    assert "temperature" not in k and k["max_tokens"] == 900 and k["system"] == "S"
+    assert k["thinking"] == {"type": "between_tools"} and k["output_config"] == {"effort": "high"}
+    assert k["messages"] == [{"role": "user", "content": "U"}]
+    assert (out.text, out.prompt_tokens, out.completion_tokens) == ('{"a": 1}', 21, 9)
+
+
+def test_claude_without_reasoning_settings_sends_neither():
+    c = _claude()
+    c.complete("S", "U")
+    assert "thinking" not in c._client.kwargs and "output_config" not in c._client.kwargs
+
+
+@pytest.mark.parametrize("tier", [1, 2, 3, 4, 5, 6])
+def test_fake_answers_every_tiers_output_contract(tier):
+    from complaintexp.prompting import load_system_prompt
+
+    out = LLMClient(make_variant(provider="fake")).complete(load_system_prompt(tier), "# Complaint (language: nl)\nORD-1234567")
+    assert parse_output(out.text, tier).ok

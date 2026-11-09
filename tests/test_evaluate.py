@@ -4,7 +4,7 @@ import csv
 
 import pytest
 
-from complaintexp.evaluate import (ScoreSheetError, _leaks, export_blind, import_scores, redaction_recall,
+from complaintexp.evaluate import (ScoreSheetError, export_blind, import_scores, leaks, redaction_recall,
                                    save_redaction_eval)
 from complaintexp.schemas import Complaint
 
@@ -32,7 +32,7 @@ def test_complaints_without_annotations_are_ignored(ps):
 
 
 @pytest.mark.parametrize(
-    "value, redacted, leaks",
+    "value, redacted, expected",
     [
         ("Jan Peeters", "Dear <PERSON_1>", False),
         ("Jan Peeters", "Dear jan peeters", True),             # case-insensitive
@@ -41,8 +41,8 @@ def test_complaints_without_annotations_are_ignored(ps):
         ("Jan Peeters", "Jan <PERSON_1>", False),              # short tokens (<4 chars) are not counted
     ],
 )
-def test_leak_detection(value, redacted, leaks):
-    assert _leaks(value, redacted) is leaks
+def test_leak_detection(value, redacted, expected):
+    assert leaks(value, redacted) is expected
 
 
 @pytest.mark.ner

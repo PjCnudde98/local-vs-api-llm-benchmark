@@ -1,6 +1,7 @@
-# Decision thresholds, fixed before any results are seen (plan, "Gates").
-# Human-readable version with rationale: docs/gates.md. Keep both in sync and
-# never edit a threshold after results are in: add a note to docs/gates.md instead.
+# Decision thresholds, fixed before any results are seen (plan, "Evaluation"
+# and "Task complexity ladder"). Human-readable version with rationale:
+# docs/gates.md. Keep both in sync and never edit a threshold after results
+# are in: add a note to docs/gates.md instead.
 #
 # `cexp report` evaluates every gate it has data for. A gate shows
 # "not measured" until the data exists.
@@ -14,14 +15,37 @@ quality:
 privacy:
   redaction_recall_min: 0.98      # per direct-identifier type, latest redaction-eval
   direct_identifier_types: [PERSON, LOCATION, EMAIL, PHONE, IBAN, NATIONAL_ID]
-  redaction_quality_loss_max: 0.2 # rubric mean A minus B, strictly below
+  redaction_quality_loss_max: 0.2 # rubric mean raw minus pseudonymised (or abstract), strictly below
 
 operations:
   p95_latency_s_max: 20           # strictly below
+  latency_tiers: [3, 4]           # "time to first draft": the single-call draft tiers
 
-# Variants the gates apply to. FAKE and other dry-run variants are reported but
-# not gated.
-gated_variants: [A, B, C, D, E]
+# Task complexity ladder: pass thresholds per tier. The first metric of a tier
+# is its main metric (drawn in the capability-frontier chart). A model passes a
+# tier when every metric passes; its failure point is the first tier it fails.
+tiers:
+  1:  # Classify
+    - {metric: label_accuracy, op: ">=", threshold: 0.95}
+  2:  # Extract
+    - {metric: field_f1, op: ">=", threshold: 0.95}
+    - {metric: valid_json_rate, op: ">=", threshold: 0.99}
+  3:  # Simple draft
+    - {metric: rubric_mean, op: ">=", threshold: 4.0}
+  4:  # Complex draft
+    - {metric: rubric_mean, op: ">=", threshold: 4.0}
+    - {metric: policy_compliance_rate, op: ">=", threshold: 0.98}
+  5:  # Policy reasoning with tools
+    - {metric: decision_accuracy, op: ">=", threshold: 0.90}
+    - {metric: valid_tool_call_rate, op: ">=", threshold: 0.98}
+  6:  # Long context
+    - {metric: factual_consistency_rate, op: ">=", threshold: 0.95}
+    - {metric: missed_fact_rate, op: "<", threshold: 0.05}
+items_per_tier: 25                # below this a tier result is marked indicative
+policy_compliant_min_score: 4     # a tier-4 draft counts as policy compliant at this rubric score or higher
+
+# Variants that are reported but never gated (dry runs).
+ungated_variants: [FAKE]
 
 # Score source preference for quality gates: human scores when present,
 # otherwise the LLM judge (marked as such in the report).

@@ -139,12 +139,24 @@ class Pseudonymiser:
         return _merge_addresses(_resolve_overlaps(spans), text)
 
     # -- transform ---------------------------------------------------------
-    def redact(self, text: str, language: str = "en") -> tuple[str, dict[str, str]]:
-        """Returns (redacted text, mapping placeholder -> original value)."""
+    def redact(
+        self, text: str, language: str = "en", mapping: dict[str, str] | None = None
+    ) -> tuple[str, dict[str, str]]:
+        """Returns (redacted text, mapping placeholder -> original value).
+
+        Pass the mapping of an earlier message to keep placeholders consistent
+        across a conversation: known values reuse their placeholder, new ones
+        get the next number. The returned mapping includes the old entries.
+        """
         spans = self.detect(text, language)
+        mapping = dict(mapping or {})
         counters: dict[str, int] = {}
         by_value: dict[tuple[str, str], str] = {}
-        mapping: dict[str, str] = {}
+        for ph, value in mapping.items():
+            m = re.fullmatch(r"<(\w+)_(\d+)>", ph)
+            if m:
+                counters[m[1]] = max(counters.get(m[1], 0), int(m[2]))
+                by_value[(m[1], value.lower())] = ph
         pieces: list[str] = []
         pos = 0
         for s in spans:  # sorted by start
@@ -199,4 +211,15 @@ def _merge_addresses(spans: list[Span], text: str) -> list[Span]:
             out[-1] = Span(prev.start, s.end, "ADDRESS")
         else:
             out.append(s)
-    return out
+    return [_absorb_city(s, text, out[i + 1].start if i + 1 < len(out) else len(text))
+            if s.type == "ADDRESS" else s for i, s in enumerate(out)]
+
+
+# ", Bristol" or ", Sint-Niklaas" right after a street, ending the clause. NER
+# misses such a city depending on context, which would leave it next to <ADDRESS_n>.
+_TRAILING_CITY = re.compile(r",\s?[A-ZÀ-Þ][\w'’]+(?:[ -][A-ZÀ-Þ][\w'’]+){0,2}(?=\s*(?:$|[.,;:!?\n]))")
+
+
+def _absorb_city(s: Span, text: str, limit: int) -> Span:
+    m = _TRAILING_CITY.match(text, s.end)
+    return Span(s.start, m.end(), s.type) if m and m.end() <= limit else s

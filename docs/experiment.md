@@ -1,271 +1,377 @@
-# Experiment specification: on-prem vs cloud LLM for complaint replies
+# Experiment specification: local vs API LLMs for complaint handling
 
-This document describes the experiment end to end: the question, the variants, the data,
-how every number in the report is computed, and what can make those numbers wrong.
+This document describes the experiment end to end: the questions, the lineup, the task ladder,
+the data, how every number in the report is computed, and what can make those numbers wrong.
 Plan of record: <https://claude.ai/artifact/NuoBbtVYJRhM49BrSuaxwv>. Decision thresholds:
-[gates.md](gates.md) and `config/gates.yaml`. How the code is tested: [testing.md](testing.md).
+[gates.md](gates.md) and `config/gates.yaml`. Models, hardware and serving: [models.md](models.md).
+How the code is tested: [testing.md](testing.md).
 
-## 1. Question
+## 1. Questions
 
-Can a model we host ourselves draft customer complaint replies well enough, fast enough and
-cheaply enough to replace or complement a frontier model hosted on Azure, given that real
-complaints contain personal data?
+The experiment builds the same complaint assistant on locally hosted open-weight models and on
+API models, and answers five questions:
 
-The harness answers this with five comparable variants that see the same complaints, the
-same prompt and the same generation settings. Model, hosting and PII handling are the only
-things that change.
+| Question | Answered by |
+|---|---|
+| **Quality:** where do local models start to perform worse, and where do they break? | the capability frontier: pass/fail per model on six tiers of increasing difficulty |
+| **Effort:** how many person-days does each setup take to run and keep running? | `hours_log.csv` |
+| **Cost:** what does a sendable reply cost per option, at low and high volume? | cost model with measured tokens, throughput and edit time |
+| **Privacy:** what does each route protect, and is pseudonymisation or abstraction good enough? | redaction recall, residual leakage per run, quality loss per route |
+| **Operations:** latency, reliability, capacity | p50/p95, failure rate, replies per hour |
 
-## 2. Variants
+The output is a decision framework: for a data class and a task tier, which route is allowed,
+which models pass, and which of those is cheapest at the expected volume.
 
-| Key | Model class | Hosting | PII handling | Real data allowed | Configured model (today) |
-|---|---|---|---|---|---|
-| A | Frontier | Azure EU Data Zone | raw text | no | `AZURE_DEPLOYMENT_FRONTIER` (not set) |
-| B | Frontier | Azure private endpoint | pseudonymised locally first | no | same as A |
-| C | Mid-size open (20-35B) | local GPU / Ollama | none needed | yes | `mistral-small3.2` |
-| D | Small open (7-9B) | laptop / Ollama | none needed | yes | `qwen3:8b` (thinking off) |
-| E (optional) | same model as C | GPU VM in own Azure subscription | pseudonymised | no | same as C |
-| FAKE | none | in-process | none | yes | `fake-1`: echoes input, for dry runs |
-| JUDGE | another model family than A | Azure | raw (synthetic only) | no | `AZURE_DEPLOYMENT_JUDGE` (not set) |
+## 2. Lineup: models x routes x reasoning
 
-Source: `config/variants.yaml`, with model names from `.env`.
+A **variant** is one model, reached through one data-handling route, with reasoning on or off.
+Its key is `<route>/<model>[+think]`, for example `local/qwen3.6-27b` or
+`pseudonymise/haiku-5.5+think`. `cexp variants` lists all of them.
 
-**Held constant across A-E** (enforced by `tests/test_config.py::test_shipped_variants_share_generation_settings`
-and `tests/test_runner.py::test_all_variants_get_the_identical_system_prompt`):
+### 2.1 Models
 
-- System prompt `prompts/system.md` with policy `prompts/policy.md` inlined.
-- User message layout (`prompting.build_user_message`): complaint text, language tag, customer facts as JSON.
-- `temperature: 0.2`, `max_tokens: 800`, JSON output mode.
-- Output contract: `{"draft_reply": ..., "agent_note": ...}`.
+Five size classes. Full table with parameters and hardware: [models.md](models.md).
 
-Allowed per-variant differences: endpoint, model, the token parameter name
-(`max_tokens` vs `max_completion_tokens`) and `reasoning_effort` (used to switch off
-qwen3 thinking, which otherwise spends the token budget before the answer).
+| Size class | Models | Hardware |
+|---|---|---|
+| Cloud | Claude Sonnet 5.5, Claude Haiku 5.5, newest mid-tier GPT on Azure | API |
+| XL local | GLM-5.3, DeepSeek-V4.1-Flash-1017, Kimi K2.6, Qwen3.8-Flash-Next | server with 512 GB RAM + GPUs |
+| Large local | Mistral Small 4 | 80 GB+ GPU |
+| Medium local | Qwen3.6-27B, Gemma 4 26B A4B, gpt-oss-20b | one 24-48 GB GPU |
+| Small local | Gemma 4 12B, Qwen3 8B | laptop GPU or CPU |
 
-## 3. Data
+The XL class tests the best open-weight model of the Kimi, GLM, DeepSeek and Qwen families
+that fits on the big server. Their flagships (up to 2.8T parameters) do not fit;
+[models.md](models.md#xl-class-the-128-gb-server) lists what was chosen instead, and why.
 
-### 3.1 Sets
+### 2.2 Routes
+
+| Route | Plan route | What leaves your infrastructure | Real data allowed | Used by |
+|---|---|---|---|---|
+| `local` | R0 fully local | nothing | yes (after DPO sign-off) | every local model |
+| `own_tenant` | R1 own-tenant GPU | pseudonymised text to a VM in your subscription | no | optional, any local model |
+| `abstract` | R2 abstract + API | a case summary written locally from pseudonymised text | no | every cloud model |
+| `pseudonymise` | R3 pseudonymise + API | text with identifiers replaced by placeholders | no | every cloud model |
+| `raw` | R4/R5 raw + API | the full text; synthetic data only | no | every cloud model (quality ceiling) |
+| `hybrid` | hybrid | depends on routing | only if the routed-to variant allows it | `hybrid/default` |
+
+- **Pseudonymise:** `Pseudonymiser.redact` replaces identifiers with consistent placeholders
+  (`<PERSON_1>`, `<ORDER_1>`). Placeholders in the answer are mapped back to the real values.
+- **Abstract:** first pseudonymise the complaint, then the abstractor (a local model,
+  `local/qwen3.6-27b` by default) writes a neutral case summary: issue, facts, request, tone,
+  no identifiers, placeholders kept. Only the summary and the (pseudonymised) customer facts go
+  to the API. So abstract is pseudonymise plus summarisation. Expect it to cost quality on
+  extraction and long-context tiers: that cost is what the route measures.
+- **Hybrid:** tiers 5 and 6 always go to `hard` (an API variant with preprocessing). For tiers
+  3 and 4 a local router model answers "easy" or "hard". Tiers 1 and 2 stay on `easy`. Set
+  `easy` and `hard` in `config/variants.yaml` after the first results (plan: best local model
+  plus the cheapest API model that passes the hard tiers).
+
+### 2.3 Held constant
+
+Within a tier every variant gets the same system prompt (`prompts/system.md` with
+`prompts/policy.md` inlined, plus the tier's task prompt from `prompts/tasks/`), the same user
+message layout, the same output contract, the same token budget (`max_tokens_by_tier`, plus
+6,000 tokens when reasoning is on) and JSON output. Enforced by
+`tests/test_config.py::test_shipped_variants_share_generation_settings` and
+`tests/test_runner.py::test_all_variants_get_the_identical_system_prompt`.
+
+Allowed per-variant differences: endpoint, model, the reasoning switch, the token parameter
+name (`max_tokens` vs `max_completion_tokens`) and temperature. The Claude API and GPT
+reasoning models reject temperature, so they run at the provider default; all other variants
+send 0.2.
+
+## 3. Task complexity ladder
+
+Every model runs the same six tiers. The **failure point** of a model is the first tier where
+it misses a threshold. The result is a capability frontier per size class, not one average.
+
+| Tier | Task | Example | Output contract | Scored by |
+|---|---|---|---|---|
+| 1. Classify | type, language, urgency, sentiment | "Is this delivery, billing or damage?" | `{"type", "language", "urgency", "sentiment"}` | automatic, vs `gold` labels |
+| 2. Extract | order number, product, requested remedy, deadline | "ORD-6120458, coffee machine, replacement, 2026-11-20" | `{"order_number", "product", "requested_remedy", "deadline"}` | automatic, vs `gold.fields` |
+| 3. Simple draft | reply to one issue with a clear policy match | late delivery inside the refund window | `{"draft_reply", "agent_note"}` | rubric (judge + humans) |
+| 4. Complex draft | angry, multi-issue or mixed-language complaints | damaged item, rude installer and billing error | `{"draft_reply", "agent_note"}` | rubric + policy compliance |
+| 5. Policy reasoning with tools | look up order and contacts, decide the remedy within policy | voucher or refund? | tool calls, then `{"final": {"decision", "justification", "agent_note"}}` | automatic, vs `gold.decision`, plus tool-call validity |
+| 6. Long context | resolve a long email thread plus retrieved policy pages | 12 messages with a contradiction about what was promised | `{"draft_reply", "agent_note"}` | judge: consistency + key facts, plus rubric |
+
+Run every model with reasoning off and on: extra reasoning often moves a small model one tier
+up, at a latency cost. The two variants show both sides.
+
+**Tier 5 tools.** `get_order(order_number)` and `get_contact_history(customer_id)` answer from
+the complaint's `tool_data`, so runs are deterministic. Tools are called through a plain JSON
+protocol (`{"tool": ..., "args": {...}}` per turn, up to 6 turns), not each server's native
+tool-calling API. That keeps the instruction identical for every model and serving stack, so
+the score measures the model, not a parser. On cloud routes every tool result is pseudonymised
+with the complaint's mapping, and placeholders in tool arguments are restored before lookup.
+
+## 4. Data
+
+### 4.1 Sets
 
 | Set | File | Source | May go to | Status |
 |---|---|---|---|---|
-| Sample | `data/synthetic/sample.jsonl` | hand-written, 6 complaints (2 nl, 2 fr, 2 en) | every variant | in use |
-| Generated | `data/synthetic/generated.jsonl` | `cexp generate`, LLM-written from `scenarios.yaml` | every variant after agent review | not generated yet |
-| Real | `data/real/*.jsonl` | historical complaints | local variants only (C, D) | not loaded; git-ignored |
+| Sample | `data/synthetic/sample.jsonl` | hand-written, 13 complaints covering all six tiers and nl/fr/en | every variant | in use (smoke test) |
+| Generated | `data/synthetic/generated.jsonl` | `cexp generate`, 25 per tier = 150 | every variant after agent review | not generated yet |
+| Real | `data/real/*.jsonl` | ~50 historical complaints with sent replies | local variants only | not loaded; git-ignored |
 
-Generated rows carry `"status": "needs_review"`. A support agent checks realism before they count.
+Generated rows carry `"status": "needs_review"`. A support agent checks realism, and every
+gold answer, before they count. Around 30 complaints also get a `gold_reply` from an
+experienced agent, to anchor scoring and calibrate the judge.
 
-### 3.2 Record format (JSONL, one complaint per line)
+### 4.2 Record format (JSONL, one complaint per line)
 
 | Field | Required | Meaning |
 |---|---|---|
 | `id` | yes | unique across all loaded files |
 | `source` | yes | `synthetic` or `real`; drives the real-data safeguard |
 | `language` | yes | `nl`, `fr` or `en` |
-| `text` | yes | the complaint as the customer wrote it |
+| `tier` | yes | 1-6 |
+| `text` | yes | the complaint as the customer wrote it; for tier 6 the whole thread |
 | `type` | no | delivery, damage, billing, refund, staff, repeat |
-| `difficulty` | no | simple, angry, rambling, multi_issue, legal, out_of_policy |
-| `facts` | no | structured customer facts given to the model (order status, dates, amounts) |
-| `pii` | no | hand annotations `[{"type": "PERSON", "text": "Jan Peeters"}]`, matched by text, not offsets |
-| `gold_reply` | no | an experienced agent's reply (target: ~30 complaints) |
+| `difficulty` | no | simple, angry, rambling, multi_issue, legal, out_of_policy, mixed_language |
+| `facts` | no | structured customer facts given to the model |
+| `pii` | no | hand annotations `[{"type": "PERSON", "text": "Jan Peeters"}]`, matched by text |
+| `gold` | tiers 1, 2, 5, 6 | tier 1: `{type, language, urgency, sentiment}`; tier 2: `{fields: {order_number, product, requested_remedy, deadline}}` (null when absent); tier 5: `{decision}`; tier 6: `{key_facts: [...]}` |
+| `tool_data` | tier 5 | `{"orders": {<order number>: {...}}, "contacts": {<customer id>: [...]}}` |
+| `context_docs` | tier 6 | retrieved policy pages |
+| `gold_reply` | no | an experienced agent's reply |
 | `sent_reply` | no | real set only: the reply that was actually sent |
 
-`load_dataset` refuses duplicate ids, unknown sources or languages, missing required fields and
-malformed `pii`, and reports `file:line`. `cexp validate` also checks that every PII
-annotation occurs verbatim in the text.
+`load_dataset` refuses duplicate ids, unknown sources, languages or tiers, missing fields,
+malformed `pii` and invalid gold for the tier, and reports `file:line`. `cexp validate` also
+checks that every PII annotation occurs verbatim in the text.
 
-### 3.3 Scenario axes for generation
+### 4.3 Generation
 
-`data/synthetic/scenarios.yaml`: language weights (nl 0.5, fr 0.3, en 0.2), six complaint
-types, six difficulty styles, 3-5 PII patterns per complaint and an optional sensitive context
-(health, bereavement, financial hardship). Generation is seeded (`--seed`), so the same seed
-gives the same scenario mix.
+`cexp generate --tiers 1 2 3 4 5 6 --n 25` writes 25 complaints per tier from
+`data/synthetic/scenarios.yaml`. The harness picks language, type, difficulty and 3-5 PII
+patterns, and where it can, the answer key:
 
-## 4. Procedure
+- Tier 1: the harness picks urgency and sentiment; the model writes a matching complaint.
+- Tier 2: the model plants the fields and returns them; the agent checks them.
+- Tier 5: the harness picks a case from `scenarios.yaml` (situation, policy rule, correct
+  decision); the model writes the complaint and the tool data that make that decision correct.
+  **Update the cases when you replace the placeholder policy.**
+- Tier 6: the model writes an 8-14 message thread with a planted contradiction and lists the
+  key facts; the harness adds three policy lines as retrieved pages.
 
-Phases follow the plan. Commands are run from the project root.
+Rows whose gold fails validation are dropped and logged. Generation is seeded (`--seed`).
+
+## 5. Procedure
 
 | Phase | Step | Command |
 |---|---|---|
-| 0. Setup | install, models, `.env` | `uv sync --extra dev --extra redaction` |
-| 1. Data | validate sample, generate + review synthetic set | `cexp validate`, `cexp generate --n 150` |
-| 2. Privacy | measure redaction recall (no model calls) | `cexp redaction-eval --data ...` |
-| Gate | DPO approval and Azure settings checked | manual |
-| 3. Drafting | run all variants on the synthetic set; C/D also on real | `cexp run --variants A B C D --warmup` |
+| 0. Setup | install, `.env`, serve local models | `uv sync --extra dev --extra redaction`; [models.md](models.md) |
+| 1. Data | validate, generate, agent review | `cexp validate`, `cexp generate` |
+| Gate | DPO approval, Azure/Foundry settings checked, model versions locked | manual |
+| 2. Privacy | redaction recall, no model calls | `cexp redaction-eval --data ...` |
+| 3. Runs | every variant on the synthetic set; local variants also on the real set | `cexp run --variants 'local/*' --warmup` and so on |
+| 3b. Capacity | replies/hour per local model | `cexp throughput --variants 'local/glm-5.3'` |
 | Gate | prompts frozen | manual: no edits to `prompts/` after this |
-| 4. Scoring | LLM judge; blind human scoring by 2-3 agents | `cexp judge`, `cexp export-blind`, `cexp import-scores` |
+| 4. Scoring | LLM judges, blind human scoring by 2-3 agents | `cexp judge --judge JUDGE`, `--judge JUDGE_GPT`, `cexp export-blind`, `cexp import-scores` |
 | 5. Readout | report against the gates | `cexp report --html --out results/report.md` |
 
 Effort is a result too: every person logs hours in `hours_log.csv`
 (`date,person,phase,task_category,variant,hours,notes`).
 
-### 4.1 What happens to one complaint (`runner.run_variant`)
+### 5.1 What happens to one complaint (`runner.process`)
 
-1. **Safeguard.** `check_allowed` raises for a `real` complaint if the variant has
-   `cloud: true` or `allow_real_data: false`. Blocked complaints are counted, never sent, never stored.
-2. **Prompt.** System prompt plus `build_user_message(complaint)`.
-3. **Pseudonymise** (B and E only). `Pseudonymiser.redact` replaces identifiers with
-   consistent placeholders (`<PERSON_1>`, `<EMAIL_1>`) and keeps the mapping in memory.
-4. **Call.** One chat-completions request; latency is timed around this call only.
-5. **Parse.** Strict JSON first, then the first `{...}` block. Anything else is a parse failure
-   (stored, counted as a failure, not retried).
-6. **Restore.** Placeholders in the draft and note are mapped back to the real values.
-7. **Log.** One row per (variant, complaint) in `results/experiment.sqlite`, including the
-   prompt exactly as sent (pseudonymised for B/E) and the raw output.
+1. **Safeguard.** `check_allowed` raises for a real complaint if the variant (for hybrid: the
+   routed-to variant) is cloud or not cleared. Blocked complaints are counted, never sent, never stored.
+2. **Route.** Hybrid picks the variant that answers.
+3. **Preprocess.** Pseudonymise (pseudonymise, abstract, own_tenant); then for abstract, the local summary.
+4. **Call.** One request, or the tool loop for tier 5.
+5. **Parse** against the tier's output contract (strict JSON, then the first `{...}` block).
+   Anything else is a parse failure: stored, counted as a failure and a failed task, not retried.
+6. **Restore** placeholders in the answer; score tiers 1, 2 and 5 against gold.
+7. **Count leakage.** For cloud routes: how many annotated PII values are still visible in
+   everything that was sent (`pii_leaked` of `pii_annotated`).
+8. **Log** one row per (variant, complaint) in `results/experiment.sqlite`, including the
+   prompt exactly as sent and the raw output.
 
 Runs are resumable: successful rows are skipped on a rerun, rows that ended in an error
-(timeout, rate limit, server down) are retried.
+(timeout, rate limit, server down) are retried. `--tiers` limits a run to some tiers.
 
-## 5. Metrics: exact definitions
+## 6. Metrics: exact definitions
 
 All metrics come from `report.build()`. The Markdown and HTML reports are two views of the same dict.
 
-### 5.1 Operations
+### 6.1 Tier metrics (capability frontier)
+
+Computed per (variant, tier) over answered runs; errors (timeouts) are excluded and show in the
+failure rate instead. A malformed answer counts as a failed task.
 
 | Metric | Definition |
 |---|---|
-| Time to draft | Client-side wall clock around the chat-completions call (`time.perf_counter`). Includes network and server queueing. Excludes prompt building and pseudonymisation (pseudonymisation time is not measured yet). |
-| p50 / p95 | Nearest-rank percentile over runs without an error, parse failures included: the k-th smallest value with k = ceil(q * n). No interpolation. |
+| Label accuracy (T1) | Mean over answers of (labels equal to gold / 4), after case and accent normalisation. Malformed = 0. |
+| Field F1 (T2) | Micro F1 over all fields: a field is a true positive when predicted and gold are both non-null and match (normalised; product also matches when one contains the other), a false positive when predicted but wrong or not in gold, a false negative when in gold but missing or wrong. |
+| Valid JSON rate (T2) | Answers that parse and have all four keys / answers. |
+| Rubric average (T3, T4) | Mean per-draft overall score (mean of criteria, averaged over raters or judges). Human scores when any exist for that (variant, tier), else the judge. Malformed drafts count as the lowest score (1). |
+| Policy compliance rate (T4) | Drafts with a policy-compliance score >= 4 / drafts. Malformed = not compliant. |
+| Decision accuracy (T5) | Final decisions equal to gold / runs. No decision within 6 turns = wrong. |
+| Valid tool-call rate (T5) | Calls to a known tool with exactly its required string arguments / all tool calls. |
+| Factual consistency rate (T6) | Mean of the judge's `consistent` flag (no contradiction with the thread or with written promises). Malformed = 0. |
+| Missed key facts (T6) | Key facts the judge marks as missed or wrong / key facts, over judged drafts. |
+
+The **main metric** of a tier is its first one. The frontier chart draws main metric /
+threshold per tier, so 100% is the threshold for every tier.
+
+**Economic failure** (local variants, per volume): the tier passes, but local cost per reply at
+that volume, using the tier's own token counts, exceeds the cheapest API variant
+(pseudonymise or abstract) that passes the same tier. Once human edit times exist, edit time x
+agent rate is added to both sides.
+
+### 6.2 Operations
+
+| Metric | Definition |
+|---|---|
+| Time to draft | Preprocessing (pseudonymisation wall time, the abstractor's or router's model time) plus model time (one call, or the sum over the tool loop). |
+| p50 / p95 (gated) | Nearest-rank percentile over tiers 3 and 4 (`operations.latency_tiers`), parse failures included, errors excluded. `p95_all_s` covers every tier. |
 | Failure rate | (errors + parse failures) / all stored rows for that variant. |
-| Tokens | `prompt_tokens` / `completion_tokens` as reported by the server, averaged over runs without an error. |
+| Tokens | Server-reported prompt/completion tokens, averaged over runs without an error; summed over turns for tier 5. Also kept per tier. |
 | Model id | The model string the server reports, stored per row to catch silent model swaps. |
+| Replies per hour | `cexp throughput`: completed requests / wall clock x 3600 at each concurrency level. The report uses the highest value whose p95 still passes the latency gate. |
 
-`cexp run --warmup` sends one untimed dummy request first, so a local server's model-load
-time does not land in the first complaint's latency. Use it for every scored run.
+`cexp run --warmup` sends one untimed dummy request to every model a variant uses, so model
+load time does not land in the first latency.
 
-### 5.2 Quality
+### 6.3 Quality (rubric)
 
-Rubric (`config/rubric.yaml`), shared by human raters and the LLM judge, integers 1-5:
+Rubric (`config/rubric.yaml`), shared by human raters and the LLM judges, integers 1-5:
 factual correctness, policy compliance, tone and empathy, language quality, completeness.
-Plus a hallucination flag (0/1).
+Plus a hallucination flag (0/1). Variant-level metrics (all scored drafts of a variant):
 
 | Metric | Definition |
 |---|---|
-| Per-criterion mean | Mean over all score rows (one row per rater per draft, or per judge model per draft). |
+| Per-criterion mean | Mean over all score rows. |
 | Overall | Mean of the per-criterion means. |
-| 95% CI | Percentile bootstrap of the mean of per-row overall scores; 2,000 resamples, seed 0. Shown only for n >= 2. |
+| 95% CI | Percentile bootstrap of the mean of per-row overall scores; 2,000 resamples, seed 0. |
 | Hallucination rate | Rows flagged 1 / rows with a flag. |
-| Edit effort | Median `edit_minutes` from human sheets: how long the rater would need to make the draft sendable. |
-| Splits | Overall per language, complaint type and difficulty (and p50 latency per split). |
+| Edit effort | Median `edit_minutes` from human sheets. |
 
-Blind scoring: `export-blind` shuffles drafts of all variants with a fixed seed (42), strips
-formatting that could reveal the model (`normalise_for_blind`: markdown bold, headings,
-quotes, extra blank lines) and writes the variant key to a separate file. `import-scores`
-validates the entire sheet before writing anything: unknown blind ids, scores outside 1-5,
-a hallucination flag other than 0/1 or a negative edit time reject the import.
+Two judges are configured: Claude Opus 5.5 (`JUDGE`) and a GPT deployment (`JUDGE_GPT`). Judges
+favour their own family, so run both and compare them with the human overlap sample. A judge
+is refused when its model equals the variant's model (for hybrid: either routed-to model), and
+never receives real complaints when it runs in the cloud. For tier 6 the judge also gets the
+numbered key facts and returns `consistent` and `missed_facts`.
 
-The judge never sees which variant wrote a draft, is refused when its model equals the
-variant's model, and never receives real complaints when it runs in the cloud.
+Blind scoring: `export-blind` takes drafts of tiers 3, 4 and 6 only, shuffles them with a fixed
+seed (42), strips formatting that could reveal the model and writes the variant key to a
+separate file. `import-scores` validates the whole sheet before writing anything.
 
-### 5.3 Privacy
+### 6.4 Privacy
 
 | Metric | Definition |
 |---|---|
-| Redaction recall, per PII type | Share of hand-annotated values that do not survive `Pseudonymiser.redact`. A value leaks when the full value, or any of its tokens of 4+ characters, still appears in the redacted text (case-insensitive). Partial leaks count: "Kerkstraat 12, 9000 Gent" with only the street redacted still leaks "9000" and "Gent". Tokens under 4 characters ("Jan", "12") are ignored because they match ordinary text. |
-| Quality loss from redaction | Overall(A) - Overall(B), using the same score source for both. |
+| Redaction recall, per PII type | Share of hand-annotated values that do not survive `Pseudonymiser.redact`. A value leaks when the full value, or any of its tokens of 4+ characters, still appears (case-insensitive). Partial leaks count. |
+| Residual leakage, per variant | For cloud routes: annotated values still visible in everything sent (prompt, summary, tool results) / annotated values. Shows what abstraction adds over pseudonymisation. |
+| Quality loss from preprocessing | Overall(raw) - Overall(pseudonymise) and Overall(raw) - Overall(abstract), same model, same score source. |
 
-`cexp redaction-eval` stores each run in the `redaction_eval` table; the report uses the latest one.
-Without the `redaction` extra the pseudonymiser runs regex-only (emails, IBANs, phones,
-national numbers, order and customer ids, addresses) and the report marks the gate "regex only".
+Addresses are regex-based in both NER modes: Dutch/Flemish, French and English street forms,
+BE/FR/NL postcode + city and UK postcodes. Adjacent pieces merge into one `<ADDRESS_n>`, and a
+city right after a street (", Bristol") is absorbed into it. Without the `redaction` extra the
+pseudonymiser runs regex-only and the report marks the recall gate "regex only".
 
-**Addresses** are regex-based in both modes, because spaCy tags at most the city and never the
-street, house number or postcode. Recognised forms: Dutch/Flemish street + number
-(`Kerkstraat 12`, `Grote Markt 1`, `Stationsplein 4 bus 2`), French number-first and number-last
-(`12 rue de la Paix`, `avenue Louise 54 bte 3`), English (`221B Baker Street`), BE/FR/NL
-postcode + city (`9000 Gent`, `75002 Paris`, `1012 LG Amsterdam`) and UK postcodes. Adjacent
-pieces, including a city found by NER, merge into one `<ADDRESS_n>` placeholder, so the model
-sees `<ADDRESS_1>` instead of street and city as separate fragments.
+### 6.5 Cost per sendable reply
 
-### 5.4 Cost per 1,000 replies
+Inputs in `config/costs.yaml`; `null` stays `n/a` rather than a made-up number.
 
-Inputs in `config/costs.yaml`; `null` stays `n/a` in the report rather than a made-up number.
-
-- **Cloud per token (A, B):** (mean prompt tokens x input price + mean completion tokens x output price) / 1e6 per reply, x 1,000.
-- **VM (E):** EUR/hour x hours/month, spread over the monthly volume.
-- **Local (C, D):** hardware / amortisation months + kW x hours/month x EUR/kWh + ops hours x EUR/hour, spread over the monthly volume.
-- **Break-even vs B:** local fixed EUR/month / B's EUR per reply = replies per month above which local is cheaper.
+- **Pay per token** (pseudonymise, abstract, raw): (mean prompt tokens x input price + mean completion tokens x output price) / 1e6, in EUR (USD prices x `usd_to_eur`).
+- **Local box** (local route, the abstractor's box, the hybrid's easy box): hardware / amortisation months + hosting + ops hours x rate, per month.
+- **Capacity cliff:** servers needed = ceil(volume / (replies per hour x 730 h x `max_utilisation`)). Without a throughput measurement one server is assumed, and the report says so.
+- **Hybrid:** the share of replies routed to `hard` x its token cost, plus the easy box.
+- **Per sendable reply** = cost per reply + median edit minutes x `agent_eur_per_hour` / 60.
+- **Break-even:** local fixed cost per month / the cheapest API variant's cost per reply.
 
 Reported at the volumes in `volumes_per_month` (1,000 and 50,000).
 
-## 6. Gates and how they are evaluated
+## 7. Gates and how they are evaluated
 
-Thresholds: [gates.md](gates.md) (rationale) and `config/gates.yaml` (machine-readable; a test
-keeps both in sync). `report.evaluate_gates` applies them as follows.
+Thresholds: [gates.md](gates.md) and `config/gates.yaml` (a test keeps both in sync).
 
 - `>=` gates pass at the threshold (rubric 4.0 passes); `<` gates are strict (p95 of exactly 20 s fails).
-- Gates apply to A-E only; FAKE is reported but never gated.
-- Quality gates use human scores when a variant has them, otherwise the LLM judge. The source is shown next to every value.
-- Edit effort uses human scores only.
+- Variant gates apply to every variant except `ungated_variants` (FAKE).
+- Quality gates use human scores when a variant has them, otherwise the LLM judge. The source is shown.
 - No data means **not measured**, never pass or fail.
-- Any gate based on fewer than 30 items carries a "small sample: treat as indicative" note.
-- Redaction recall is gated per direct-identifier type (`PERSON, LOCATION, EMAIL, PHONE, IBAN, NATIONAL_ID`). Order and customer ids are reported but not gated.
+- Fewer than 30 items for a variant gate, or fewer than 25 for a tier, carries a "small sample: treat as indicative" note.
+- Redaction recall is gated per direct-identifier type (`PERSON, LOCATION, EMAIL, PHONE, IBAN, NATIONAL_ID`).
 - The pairwise gate shows "not measured" until pairwise export exists.
 
-## 7. Safeguards
+## 8. Safeguards
 
-- Real complaints cannot reach a cloud variant or a cloud judge (`runner.check_allowed`, `judge_variant`). Tested for every combination of `cloud` and `allow_real_data`.
-- Cloud variants ship with `allow_real_data: false`; a test fails if that changes.
-- The run log stores the prompt as sent. For B and E that is the pseudonymised text.
+- Real complaints cannot reach a cloud variant, a cloud judge or a hybrid's cloud target (`runner.check_allowed`).
+- Cloud routes ship with `allow_real_data: false`; a test fails if that changes.
+- The run log stores what was sent: pseudonymised or abstracted text for cloud routes.
 - `data/real/` and `results/` are git-ignored.
-- The HTML/JSON report embeds complaint and draft text for synthetic complaints only. Real text needs `--include-real-text`, and the page then says it must not be shared.
-- The test suite blocks all network access, so no test can call Azure or a local server by accident.
+- The HTML/JSON report embeds complaint and answer text for synthetic complaints only, unless `--include-real-text`.
+- The test suite blocks all network access.
 
-## 8. Storage (`results/experiment.sqlite`)
+## 9. Storage (`results/experiment.sqlite`)
 
 | Table | Key | Content |
 |---|---|---|
-| `runs` | (variant, complaint_id) | metadata, prompt sent, raw output, draft, note, parse flag, latency, tokens, error |
-| `judgements` | (variant, complaint_id, judge_model) | scores JSON, hallucination flag |
-| `human_scores` | (variant, complaint_id, rater) | scores JSON, hallucination flag, edit minutes |
+| `runs` | (variant, complaint_id) | tier, route, model, size class, reasoning, prompt sent, preprocessing output, raw and parsed answer, automatic scores, tool calls, leakage, latency, tokens, error |
+| `judgements` | (variant, complaint_id, judge_model) | rubric scores, hallucination flag, tier-6 consistency and missed facts |
+| `human_scores` | (variant, complaint_id, rater) | rubric scores, hallucination flag, edit minutes |
 | `redaction_eval` | (ts, pii_type) | n, leaked, missed values, NER on/off, dataset |
+| `throughput` | (ts, variant, concurrency) | requests, wall time, replies per hour, p50/p95 |
 
-## 9. Outputs
+Databases from the first version are migrated on open (new columns added, old rows kept).
+Old rows have no tier, so they appear in the variant tables but not in the frontier.
+
+## 10. Outputs
 
 | Output | Command | Content |
 |---|---|---|
-| Markdown | `cexp report --out results/report.md` | gates, operations, cost, quality with CI and splits, privacy, effort |
-| Interactive HTML | `cexp report --html` (writes `results/report.html`) | everything above, plus filters (variant, language, type, difficulty, data source, score source), a latency strip chart, per-criterion quality chart, breakdown heat table, redaction chart, effort chart and a side-by-side draft explorer. Single file, no network, light and dark theme. |
-| JSON | `cexp report --json results/report.json` | the raw report dict, for further analysis |
+| Markdown | `cexp report --out results/report.md` | frontier, gates, operations, cost, quality with CI and splits, privacy, effort |
+| Interactive HTML | `cexp report --html` | the same, plus the frontier chart (one line per variant across tiers, threshold at 100%), filters (variant, tier, route, language, type, difficulty, source, score source), latency strip chart, quality chart, breakdown heat table, cost table and a side-by-side answer explorer with gold answers |
+| JSON | `cexp report --json results/report.json` | the raw report dict |
 
-Both reports label variants by **model name**, not by letter: the model id the server
-reported, else the configured model, else the variant's label. When two variants run the
-same model (A/B, C/E), the hosting and PII handling from the label is appended, e.g.
-`gpt-x (Azure private endpoint, pseudonymised)`. The letters stay in the database and JSON.
+Reports name variants by model and route, e.g. "Claude Haiku 5.5 (pseudonymised)" or
+"Qwen3 8B (local, thinking)". Colours follow the size class.
 
-The HTML recomputes charts and tables in the browser from the embedded per-draft records
-when you change a filter. The gates table always reflects the full data set.
-
-## 10. Reproducibility
+## 11. Reproducibility
 
 - Seeds: generation `--seed` (default 1), blind export 42, bootstrap 0 (Python) / 7 (browser).
 - Every row stores the server-reported model id and a UTC timestamp.
-- Prompts and policy are versioned files; freeze them at gate 3 and record the commit.
-- Generation settings come from `variants.yaml` defaults and are identical for A-E.
-- Local models are not bit-reproducible at temperature 0.2. Treat single drafts as samples, not fixed outputs.
+- Lock model versions at gate 1 ([models.md](models.md#locking-versions)); freeze prompts at gate 3 and record the commit.
+- Local models are not bit-reproducible at temperature 0.2. Treat single answers as samples.
 
-## 11. Threats to validity
+## 12. Threats to validity
 
-- **Sample size.** 6 complaints per variant is a smoke test. Rubric means need roughly 60+ items per variant before a 0.2-point difference means anything; check the CI column.
-- **Cold start.** C's first call in the current data took 41.9 s against 15.7-28.7 s for the rest: model loading. With n = 6 that one call sets p95. Rerun with `--warmup` before reading the latency gate.
-- **Test hardware.** C and D ran through Ollama on one machine, one request at a time. Production latency depends on the GPU and on concurrency, which this harness does not load-test.
-- **Judge bias.** An LLM judge tends to favour its own model family and longer answers. Use another family than A, and check it against human scores on an overlap sample before trusting judge-only results.
-- **Synthetic vs real.** Generated complaints are cleaner than real ones. The real set (local variants only) is the check.
+- **Sample size.** 13 sample complaints are a smoke test. 25 per tier gives a coarse pass/fail;
+  rubric means need ~60 human-scored items per variant before a 0.5-point difference is visible.
+- **Quantisation.** XL models run quantised, Kimi K2.6 at ~2 bits. A failure can be the quant,
+  not the model. Record the quant and, if a tier is close, rerun at a higher precision.
+- **Test hardware.** Latency and throughput depend on GPU, RAM speed and how many MoE experts
+  sit in RAM. Record the hardware. One machine serving one model is not a production cluster.
+- **Temperature.** Claude and GPT reasoning models run at their default temperature, the others at 0.2.
+- **JSON tool protocol.** Tier 5 measures tool use through a text protocol. Native tool-calling
+  APIs can do better or worse per model.
+- **Judge bias.** A judge favours its own family and longer answers. Use both judges, and check
+  them against human scores on an overlap sample before trusting judge-only results.
+- **Synthetic vs real.** Generated complaints are cleaner than real ones. The real set (local
+  variants only) is the check. Generated gold answers are only as good as the agent review.
 - **Blinding.** Normalisation removes markdown, but sign-off style and length can still give a model away.
-- **Redaction recall** is measured on the annotated sample only. Annotation misses are invisible to the metric.
-- **Address patterns** need a recognisable street word (`-straat`, `-laan`, `rue`, `Street`, ...)
-  or a postcode. A bare `Damrak 1` with no postcode is missed. A capitalised word plus a
-  4-digit number that is not a year (`1500 Brussels`) can be over-redacted; years are only
-  treated as postcodes after a comma, a colon or at a line start.
-- **Placeholders.** If a model rewrites a placeholder (`<PERSON 1>`, `PERSON_1`), restore leaves it in the draft. The raw output is kept so this can be counted.
+- **Redaction recall** is measured on annotated complaints only; annotation misses are invisible.
+- **Address patterns** need a street word or a postcode. A bare `Damrak 1` is missed.
+- **Placeholders.** A model that rewrites a placeholder (`<PERSON 1>`) leaves it in the draft. The raw output is kept.
 
-## 12. Status on 2026-11-06
+## 13. Status on 2026-11-09
 
-- Runs: C (`mistral-small3.2`) and D (`qwen3:8b`) on the 6 sample complaints, no errors or parse failures.
-- Latency: C p50 20.0 s / p95 41.9 s; D p50 11.4 s / p95 14.0 s. C's p95 includes a cold start, but its slowest warm draft (28.7 s) also misses the < 20 s gate, so C fails on this machine either way. D passes.
-- Redaction (NER on): 100% for every annotated type, including addresses. Until 2026-11-06 only the city was redacted and "Kerkstraat 12, 9000 Gent" leaked street and postcode (LOCATION 50%); address patterns fixed this. Regex-only mode still misses names and lone cities, so B must run with NER. The sample has only 2 addresses: measure again on the generated set.
-- Not yet run: A, B, E (no Azure deployment), LLM judge, human scoring; costs and hours not filled in.
+- Harness v0.3: lineup of 20 models/routes x reasoning modes (40 variants), task ladder, abstract
+  and hybrid routes, tool loop, throughput, cost per sendable reply, frontier report.
+- Data: 13 hand-written sample complaints across all tiers. Generated set not produced yet.
+- Redaction (NER on): 100% recall for every annotated type on the sample, after fixing a city
+  leak after English street addresses ("14 Elm Grove, Bristol").
+- Earlier runs (2026-11-06, v0.2): `mistral-small3.2` and `qwen3:8b` on the 6 drafting samples.
+  Those rows have no tier and are kept only for reference.
+- Not yet run: anything on the new lineup.
 
-## 13. Not built yet
+## 14. Not built yet
 
-- Pairwise preference export/import (gate: local wins or ties >= 40% vs B).
+- Pairwise preference export/import (gate: local wins or ties >= 40% vs pseudonymised API).
 - Edit distance against `sent_reply` for the real set.
-- Azure-side check of abuse monitoring and retention settings (manual, before any cloud call).
-- Placeholder-integrity metric (placeholders lost or mangled by B/E).
+- Placeholder-integrity metric (placeholders lost or mangled).
+- Azure/Foundry check of abuse monitoring and retention settings (manual, before any cloud call).

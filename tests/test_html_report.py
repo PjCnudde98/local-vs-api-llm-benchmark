@@ -18,8 +18,8 @@ def _data(con, **kw):
     insert_score(con, "judgements", "C", "s1", 4)
     con.execute("UPDATE runs SET draft='</script><script>alert(1)</script> & <b>' WHERE complaint_id='s1'")
     con.commit()
-    cs = [Complaint(id="s1", source="synthetic", language="en", text="Synthetic <text>"),
-          Complaint(id="r1", source="real", language="nl", text="REAL CUSTOMER TEXT")]
+    cs = [Complaint(id="s1", source="synthetic", language="en", text="Synthetic <text>", tier=3),
+          Complaint(id="r1", source="real", language="nl", text="REAL CUSTOMER TEXT", tier=3)]
     return build(con, costs=COSTS, complaints=cs, hours_csv=None, **kw)
 
 
@@ -63,3 +63,10 @@ def test_page_carries_model_names(con):
     d = _data(con, variants={})
     assert d["names"] == {"C": "m-C", "D": "m-D"}
     assert _embedded(render_html(d))["names"] == d["names"]
+
+
+def test_page_carries_the_capability_frontier(con):
+    d = _data(con)
+    got = _embedded(render_html(d))
+    assert {c["variant"] for c in got["frontier"]["cells"]} == {"C", "D"}
+    assert 'id="c-frontier"' in render_html(d)

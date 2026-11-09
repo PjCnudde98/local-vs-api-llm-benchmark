@@ -1,31 +1,49 @@
-# Inputs for "cost per 1,000 replies". Leave a value null until you have the
-# real number; the report then prints n/a instead of a made-up figure.
+# Inputs for "cost per sendable reply" (plan, "Cost model").
+# Leave a value null until you have the real number: the report then prints
+# n/a instead of a made-up figure. Values marked "illustrative" are the plan's
+# example assumptions: replace them with quotes and measurements before
+# drawing conclusions.
 
 volumes_per_month: [1000, 50000]
+agent_eur_per_hour: 40          # loaded agent cost (illustrative, HR figure)
+usd_to_eur: 0.86                # illustrative: set the rate of the day you report
+max_utilisation: 0.5            # share of a server's hours you can count on at measured throughput
 
-# Cloud: list price per 1M tokens (EUR). Fill in from the Azure price list.
-cloud:
-  A: {input_per_1m: null, output_per_1m: null}
-  B: {input_per_1m: null, output_per_1m: null}
-  E:                                   # GPU VM billed per hour, not per token
-    vm_eur_per_hour: null
-    hours_per_month: 730
+# Pay-per-token models: list price per 1M tokens. `currency` is USD or EUR.
+models:
+  sonnet-5.5: {input_per_1m: 2.00, output_per_1m: 10.00, currency: USD}   # Claude API / Foundry list price, 2026-10
+  haiku-5.5: {input_per_1m: 0.10, output_per_1m: 0.50, currency: USD}     # up to 100K prompt tokens
+  gpt: {input_per_1m: null, output_per_1m: null, currency: EUR}           # Azure price list for your deployment
 
-# Local: hardware amortised, power, ops hours.
-local:
-  C:
+# Local hardware: fixed cost per month = hardware / amortisation_months
+#   + hosting_eur_per_month (power, rack) + ops_hours_per_month x eur_per_ops_hour.
+# A GPU VM in your own subscription (own_tenant route) uses vm_eur_per_hour x hours_per_month instead.
+# Each local model names its profile with `hardware:` in config/variants.yaml.
+hardware:
+  laptop:
     hardware_eur: null
     amortisation_months: 36
-    power_watts: 350
-    eur_per_kwh: 0.30
-    hours_per_month: 730
-    ops_hours_per_month: 4
-    eur_per_ops_hour: 80
-  D:
-    hardware_eur: null
-    amortisation_months: 36
-    power_watts: 60
-    eur_per_kwh: 0.30
-    hours_per_month: 730
+    hosting_eur_per_month: 5
     ops_hours_per_month: 1
     eur_per_ops_hour: 80
+  gpu-48gb:                     # plan: single-GPU server, 48 GB (illustrative)
+    hardware_eur: 20000
+    amortisation_months: 36
+    hosting_eur_per_month: 150
+    ops_hours_per_month: 20     # 0.2 FTE, about EUR 1,600 a month
+    eur_per_ops_hour: 80
+  gpu-80gb:
+    hardware_eur: null
+    amortisation_months: 36
+    hosting_eur_per_month: 200
+    ops_hours_per_month: 20
+    eur_per_ops_hour: 80
+  xl-server-512gb:              # >128 GB server for the XL class: 512 GB RAM + GPUs
+    hardware_eur: null
+    amortisation_months: 36
+    hosting_eur_per_month: null
+    ops_hours_per_month: 20
+    eur_per_ops_hour: 80
+  azure-gpu-vm:                 # own_tenant route
+    vm_eur_per_hour: null
+    hours_per_month: 730

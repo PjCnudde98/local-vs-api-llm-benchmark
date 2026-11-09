@@ -3,21 +3,27 @@
 import pytest
 
 from complaintexp.config import load_gates
-from complaintexp.report import (_pct, bootstrap_ci, build, cost_per_1000, effort, evaluate_gates, operations,
-                                 quality, render_markdown, splits)
+from complaintexp.report import (_pct, bootstrap_ci, build, costs_table, effort, evaluate_gates, fixed_per_month,
+                                 frontier, operations, quality, render_markdown, splits)
 from complaintexp.schemas import Complaint
 
 from .conftest import insert_run, insert_score
 
 COSTS = {
     "volumes_per_month": [1000, 50000],
-    "cloud": {"A": {"input_per_1m": None, "output_per_1m": None},
-              "B": {"input_per_1m": 2.0, "output_per_1m": 8.0},
-              "E": {"vm_eur_per_hour": 1.0, "hours_per_month": 730}},
-    "local": {"C": {"hardware_eur": 3600, "amortisation_months": 36, "power_watts": 350, "eur_per_kwh": 0.30,
-                    "hours_per_month": 730, "ops_hours_per_month": 4, "eur_per_ops_hour": 80},
-              "D": {"hardware_eur": None}},
+    "agent_eur_per_hour": 60,
+    "usd_to_eur": 0.5,
+    "max_utilisation": 1.0,
+    "models": {"haiku": {"input_per_1m": 2.0, "output_per_1m": 8.0, "currency": "EUR"},
+               "sonnet": {"input_per_1m": 4.0, "output_per_1m": 16.0, "currency": "USD"},
+               "gpt": {"input_per_1m": None, "output_per_1m": None}},
+    "hardware": {"box": {"hardware_eur": 3600, "amortisation_months": 36, "hosting_eur_per_month": 50,
+                         "ops_hours_per_month": 4, "eur_per_ops_hour": 80},
+                 "empty": {"hardware_eur": None, "amortisation_months": 36, "hosting_eur_per_month": 50,
+                           "ops_hours_per_month": 4, "eur_per_ops_hour": 80},
+                 "vm": {"vm_eur_per_hour": 1.0, "hours_per_month": 730}},
 }
+BOX_FIXED = 3600 / 36 + 50 + 4 * 80
 
 
 # -- statistics ---------------------------------------------------------------
@@ -62,39 +68,76 @@ def test_operations_empty_db(con):
 
 
 # -- cost ---------------------------------------------------------------------
-def _ops(*variants, pt=100, ct=50):
-    return [{"variant": v, "mean_prompt_tokens": pt, "mean_completion_tokens": ct} for v in variants]
+def _op_row(v, route, model_key=None, hardware=None, pt=100, ct=50, n=10):
+    return {"variant": v, "route": route, "model_key": model_key, "hardware": hardware, "n": n, "errors": 0,
+            "mean_prompt_tokens": pt, "mean_completion_tokens": ct, "tokens_by_tier": {}}
 
 
-def test_local_cost_amortises_hardware_power_and_ops():
-    (c,) = cost_per_1000(_ops("C"), COSTS)
-    fixed = 3600 / 36 + 0.35 * 730 * 0.30 + 4 * 80
-    assert c["fixed_eur_per_month"] == pytest.approx(fixed)
-    assert c["eur_per_1000@1000"] == pytest.approx(fixed)
-    assert c["eur_per_1000@50000"] == pytest.approx(fixed / 50)
+def _costs(*ops, qual=(), variants=None, tp=None):
+    return {r["variant"]: r for r in costs_table(list(ops), list(qual), COSTS, variants or {}, tp or {})}
 
 
-def test_cloud_token_cost():
-    (b,) = cost_per_1000(_ops("B"), COSTS)
-    assert b["eur_per_reply"] == pytest.approx((100 * 2 + 50 * 8) / 1e6)
-    assert b["eur_per_1000@1000"] == b["eur_per_1000@50000"] == pytest.approx(0.6)
+def test_local_fixed_cost_is_amortised_hardware_hosting_and_ops():
+    assert fixed_per_month(COSTS, "box") == pytest.approx(BOX_FIXED)
+    c = _costs(_op_row("local/m", "local", hardware="box"))["local/m"]
+    assert c["eur_per_1000@1000"] == pytest.approx(BOX_FIXED)
+    assert c["eur_per_1000@50000"] == pytest.approx(BOX_FIXED / 50)
+
+
+def test_token_cost_in_eur_and_converted_from_usd():
+    rows = _costs(_op_row("pseudonymise/haiku", "pseudonymise", "haiku"),
+                  _op_row("pseudonymise/sonnet", "pseudonymise", "sonnet"))
+    assert rows["pseudonymise/haiku"]["eur_per_reply_variable"] == pytest.approx((100 * 2 + 50 * 8) / 1e6)
+    assert rows["pseudonymise/sonnet"]["eur_per_reply_variable"] == pytest.approx((100 * 4 + 50 * 16) / 1e6 * 0.5)
+    assert rows["pseudonymise/haiku"]["eur_per_1000@1000"] == rows["pseudonymise/haiku"]["eur_per_1000@50000"]
 
 
 def test_vm_cost_is_fixed_per_month():
-    (e,) = cost_per_1000(_ops("E"), COSTS)
-    assert e["fixed_eur_per_month"] == 730 and e["eur_per_1000@1000"] == 730
+    assert fixed_per_month(COSTS, "vm") == 730
 
 
-def test_missing_prices_give_none_not_zero():
-    rows = {r["variant"]: r for r in cost_per_1000(_ops("A", "D", "FAKE"), COSTS)}
+def test_missing_inputs_give_none_not_zero():
+    rows = _costs(_op_row("raw/gpt", "raw", "gpt"), _op_row("local/x", "local", hardware="empty"))
     assert all(r["eur_per_1000@1000"] is None for r in rows.values())
+    assert any("empty inputs" in n for n in rows["local/x"]["notes"])
 
 
-def test_break_even_against_B():
-    rows = {r["variant"]: r for r in cost_per_1000(_ops("B", "C"), COSTS)}
-    assert rows["C"]["break_even_replies_per_month_vs_B"] == pytest.approx(
-        rows["C"]["fixed_eur_per_month"] / rows["B"]["eur_per_reply"])
-    assert "break_even_replies_per_month_vs_B" not in rows["B"]
+def test_sendable_reply_adds_agent_edit_time():
+    q = [{"source": "human", "variant": "local/m", "edit_minutes_median": 2.0}]
+    c = _costs(_op_row("local/m", "local", hardware="box"), qual=q)["local/m"]
+    assert c["eur_per_sendable@1000"] == pytest.approx(BOX_FIXED / 1000 + 2.0 * 60 / 60)
+
+
+def test_capacity_cliff_adds_servers_from_measured_throughput():
+    tp = {"local/m": {"replies_per_hour": 10, "concurrency": 1, "p95_s": 5}}  # 7,300 replies a month per box
+    c = _costs(_op_row("local/m", "local", hardware="box"), tp=tp)["local/m"]
+    assert c["servers@1000"] == 1 and c["servers@50000"] == 7
+    assert c["eur_per_1000@50000"] == pytest.approx(BOX_FIXED * 7 / 50)
+
+
+def test_unmeasured_throughput_assumes_one_server_and_says_so():
+    c = _costs(_op_row("local/m", "local", hardware="box"))["local/m"]
+    assert c["servers@50000"] == 1 and any("throughput not measured" in n for n in c["notes"])
+
+
+def test_break_even_against_cheapest_api_route():
+    rows = _costs(_op_row("pseudonymise/haiku", "pseudonymise", "haiku"),
+                  _op_row("pseudonymise/sonnet", "pseudonymise", "sonnet"),
+                  _op_row("local/m", "local", hardware="box"))
+    cheapest = min(rows["pseudonymise/haiku"]["eur_per_reply_variable"],
+                   rows["pseudonymise/sonnet"]["eur_per_reply_variable"])
+    assert rows["local/m"]["break_even_replies_per_month"] == pytest.approx(BOX_FIXED / cheapest)
+    assert "break_even_replies_per_month" not in rows["pseudonymise/haiku"]
+
+
+def test_abstract_route_adds_the_abstractors_box():
+    from .conftest import make_variant
+
+    vs = {"abstract/haiku": make_variant("abstract/haiku", route="abstract", abstractor="local/m"),
+          "local/m": make_variant("local/m", hardware="box")}
+    c = _costs(_op_row("abstract/haiku", "abstract", "haiku"), variants=vs)["abstract/haiku"]
+    assert c["fixed_eur_per_month"] == pytest.approx(BOX_FIXED)
+    assert c["eur_per_1000@1000"] == pytest.approx(((100 * 2 + 50 * 8) / 1e6 + BOX_FIXED / 1000) * 1000)
 
 
 # -- quality and splits ---------------------------------------------------------
@@ -124,8 +167,8 @@ def test_splits_by_language(con):
 G = load_gates()
 
 
-def _op(v, p95, n=40):
-    return {"variant": v, "p95_s": p95, "n": n}
+def _op(v, p95, n=40, route="local"):
+    return {"variant": v, "p95_s": p95, "n": n, "n_latency": n, "route": route}
 
 
 def _q(v, overall, src="llm_judge", hall=0.0, n=40, edit=None):
@@ -166,10 +209,21 @@ def test_dry_run_variants_are_not_gated():
     assert not any(g["variant"] == "FAKE" for g in gates)
 
 
-def test_redaction_quality_loss_is_A_minus_B():
-    gates = evaluate_gates([], [_q("A", 4.5), _q("B", 4.2)], None, G)
-    g = _status(gates, "Quality loss", "B")
+def test_privacy_quality_loss_is_raw_minus_each_preprocessing_route():
+    ops = [_op("raw/haiku", 1, route="raw"), _op("pseudonymise/haiku", 1, route="pseudonymise"),
+           _op("abstract/haiku", 1, route="abstract")]
+    gates = evaluate_gates(ops, [_q("raw/haiku", 4.5), _q("pseudonymise/haiku", 4.2), _q("abstract/haiku", 4.4)],
+                           None, G)
+    g = _status(gates, "Quality loss from pseudonymise", "pseudonymise/haiku")
     assert g["value"] == pytest.approx(0.3) and g["status"] == "fail"
+    assert _status(gates, "Quality loss from abstract", "abstract/haiku")["status"] == "pass"
+
+
+def test_latency_gate_uses_draft_tiers_only(con):
+    insert_run(con, "local/m", "t3", latency=5, tier=3)
+    insert_run(con, "local/m", "t5", latency=90, tier=5)  # tool loop: several calls
+    (o,) = operations(con)
+    assert o["p95_s"] == 5 and o["p95_all_s"] == 90 and o["n_latency"] == 1
 
 
 def test_redaction_recall_gate_per_direct_identifier_type():
@@ -210,8 +264,8 @@ def _seed(con):
     con.execute("UPDATE runs SET draft='secret draft' WHERE complaint_id='r1'")
     con.commit()
     insert_score(con, "judgements", "C", "s1", 4)
-    return [Complaint(id="s1", source="synthetic", language="en", text="synthetic text"),
-            Complaint(id="r1", source="real", language="en", text="REAL CUSTOMER TEXT")]
+    return [Complaint(id="s1", source="synthetic", language="en", text="synthetic text", tier=3),
+            Complaint(id="r1", source="real", language="en", text="REAL CUSTOMER TEXT", tier=3)]
 
 
 def test_build_hides_real_text_by_default(con, tmp_path):
@@ -241,8 +295,8 @@ def test_records_carry_judge_scores(con):
 
 def test_markdown_has_every_section(con):
     md = render_markdown(build(con, costs=COSTS, complaints=_seed(con), hours_csv=None))
-    for h in ("## Gates", "## Operations", "## Cost per 1,000", "## Quality", "## Privacy", "## Effort",
-              "### Quality by language"):
+    for h in ("## Capability frontier", "## Gates", "## Operations", "## Cost (EUR)", "## Quality", "## Privacy",
+              "## Effort", "### Quality by language", "### Quality by tier"):
         assert h in md, h
 
 
@@ -261,22 +315,23 @@ def _ops_with(**models):
     return [{"variant": k, "model_ids": [m] if m else []} for k, m in models.items()]
 
 
-def test_variants_are_named_after_the_reported_model():
+def test_unknown_variants_are_named_after_the_reported_model():
     names = display_names(["C", "D"], _ops_with(C="mistral-small3.2", D="qwen3:8b"), {})
     assert names == {"C": "mistral-small3.2", "D": "qwen3:8b"}
 
 
-def test_shared_model_is_disambiguated_by_hosting():
-    vs = {"A": make_variant("A", model="gpt-x", label="Frontier / Azure EU Data Zone / raw text"),
-          "B": make_variant("B", model="gpt-x", label="Frontier / Azure private endpoint / pseudonymised")}
-    names = display_names(["A", "B"], _ops_with(A="gpt-x", B="gpt-x"), vs)
-    assert names == {"A": "gpt-x (Azure EU Data Zone, raw text)", "B": "gpt-x (Azure private endpoint, pseudonymised)"}
+def test_names_show_model_label_route_and_thinking():
+    vs = {"pseudonymise/h": make_variant("pseudonymise/h", model_label="Claude Haiku 5.5", route="pseudonymise"),
+          "raw/h": make_variant("raw/h", model_label="Claude Haiku 5.5", route="raw"),
+          "local/q+think": make_variant("local/q+think", model_label="Qwen3 8B", route="local", reasoning="on")}
+    assert display_names(list(vs), [], vs) == {"pseudonymise/h": "Claude Haiku 5.5 (pseudonymised)",
+                                               "raw/h": "Claude Haiku 5.5 (raw text)",
+                                               "local/q+think": "Qwen3 8B (local, thinking)"}
 
 
-def test_unrun_variant_falls_back_to_config_then_label():
-    vs = {"A": make_variant("A", model="${AZURE_DEPLOYMENT_FRONTIER}", label="Frontier / Azure"),
-          "C": make_variant("C", model="mistral-small3.2")}
-    assert display_names(["A", "C"], [], vs) == {"A": "Frontier / Azure", "C": "mistral-small3.2"}
+def test_unset_model_env_var_is_never_shown():
+    vs = {"raw/gpt": make_variant("raw/gpt", model="${AZURE_DEPLOYMENT_GPT}", label="GPT / Azure", route="")}
+    assert display_names(["raw/gpt"], [], vs) == {"raw/gpt": "GPT / Azure"}
 
 
 def test_names_are_always_unique():
@@ -285,8 +340,89 @@ def test_names_are_always_unique():
     assert len(set(names.values())) == 2
 
 
-def test_markdown_shows_model_names_not_letters(con):
+def test_markdown_shows_model_names_not_keys(con):
     insert_run(con, "C", "s1")
     insert_score(con, "judgements", "C", "s1", 4)
     md = render_markdown(build(con, costs=COSTS, hours_csv=None, variants={}))
     assert "| m-C |" in md and "| C |" not in md
+
+
+# -- capability frontier ----------------------------------------------------------------
+R = load_gates()
+RUBRIC = {"scale": [1, 5], "criteria": {}}
+
+
+def _cell(fr, v, tier):
+    return next(c for c in fr["cells"] if c["variant"] == v and c["tier"] == tier)
+
+
+def test_tier1_label_accuracy_and_parse_failures_count_as_zero(con):
+    insert_run(con, "local/m", "a", tier=1, metrics={"label_accuracy": 1.0})
+    insert_run(con, "local/m", "b", tier=1, metrics={"label_accuracy": 0.0}, parse_ok=0)
+    c = _cell(frontier(con, R, RUBRIC), "local/m", 1)
+    assert c["metrics"][0]["value"] == 0.5 and c["status"] == "fail"
+
+
+def test_tier2_micro_f1_and_valid_json_rate(con):
+    insert_run(con, "local/m", "a", tier=2, metrics={"tp": 3, "fp": 0, "fn": 1, "valid_json": 1})
+    insert_run(con, "local/m", "b", tier=2, metrics={"tp": 4, "fp": 0, "fn": 0, "valid_json": 1})
+    m = {x["metric"]: x for x in _cell(frontier(con, R, RUBRIC), "local/m", 2)["metrics"]}
+    assert m["field_f1"]["value"] == pytest.approx(2 * 7 / (2 * 7 + 1))
+    assert m["valid_json_rate"]["value"] == 1.0 and m["valid_json_rate"]["status"] == "pass"
+
+
+def test_tier5_decision_accuracy_and_valid_tool_calls(con):
+    insert_run(con, "local/m", "a", tier=5, metrics={"decision_correct": 1}, tool_calls=3, valid_tool_calls=3)
+    insert_run(con, "local/m", "b", tier=5, metrics={"decision_correct": 0}, tool_calls=2, valid_tool_calls=1)
+    m = {x["metric"]: x["value"] for x in _cell(frontier(con, R, RUBRIC), "local/m", 5)["metrics"]}
+    assert m == {"decision_accuracy": 0.5, "valid_tool_call_rate": pytest.approx(4 / 5)}
+
+
+def test_draft_tier_rubric_counts_malformed_drafts_as_lowest_score(con):
+    insert_run(con, "local/m", "a", tier=3)
+    insert_score(con, "judgements", "local/m", "a", 5)
+    insert_run(con, "local/m", "b", tier=3, parse_ok=0)
+    c = _cell(frontier(con, R, RUBRIC), "local/m", 3)
+    assert c["metrics"][0]["value"] == 3.0 and c["score_source"] == "llm_judge"
+
+
+def test_tier4_policy_compliance_rate(con):
+    for i, pc in enumerate([5, 4, 3, 5]):
+        insert_run(con, "local/m", f"c{i}", tier=4)
+        insert_score(con, "judgements", "local/m", f"c{i}", 5, policy=pc)
+    m = {x["metric"]: x["value"] for x in _cell(frontier(con, R, RUBRIC), "local/m", 4)["metrics"]}
+    assert m["policy_compliance_rate"] == 0.75
+
+
+def test_tier6_consistency_and_missed_facts_from_judge(con):
+    insert_run(con, "local/m", "a", tier=6)
+    insert_score(con, "judgements", "local/m", "a", 4,
+                 extra={"consistent": 1, "missed_facts": [2], "n_key_facts": 5})
+    insert_run(con, "local/m", "b", tier=6)
+    insert_score(con, "judgements", "local/m", "b", 4,
+                 extra={"consistent": 0, "missed_facts": [], "n_key_facts": 5})
+    m = {x["metric"]: x["value"] for x in _cell(frontier(con, R, RUBRIC), "local/m", 6)["metrics"]}
+    assert m == {"factual_consistency_rate": 0.5, "missed_fact_rate": pytest.approx(1 / 10)}
+
+
+def test_failure_point_is_the_first_failing_tier(con):
+    insert_run(con, "local/m", "a", tier=1, metrics={"label_accuracy": 1.0})
+    insert_run(con, "local/m", "b", tier=2, metrics={"tp": 4, "fp": 0, "fn": 0, "valid_json": 1})
+    insert_run(con, "local/m", "c", tier=5, metrics={"decision_correct": 0}, tool_calls=1, valid_tool_calls=1)
+    fr = frontier(con, R, RUBRIC)
+    s = next(x for x in fr["summary"] if x["variant"] == "local/m")
+    assert s["breaks_at"] == 5 and s["passed"] == [1, 2]
+    assert _cell(fr, "local/m", 3)["status"] == "not_measured"
+    assert "small sample" in _cell(fr, "local/m", 1)["note"]
+
+
+def test_economic_failure_when_local_costs_more_than_cheapest_passing_api(con):
+    for v, route, mk, hw in (("local/m", "local", "m", "box"), ("pseudonymise/haiku", "pseudonymise", "haiku", None)):
+        insert_run(con, v, "a", tier=1, metrics={"label_accuracy": 1.0}, route=route, model_key=mk, hardware=hw)
+    ops = operations(con)
+    rows = costs_table(ops, [], COSTS, {}, {})
+    fr = frontier(con, R, RUBRIC, rows, ops, COSTS, {})
+    econ = _cell(fr, "local/m", 1)["economic"]
+    assert econ[1000]["status"] == "fail"       # ~470 EUR/month spread over 1,000 replies
+    assert econ[1000]["api_variant"] == "pseudonymise/haiku"
+    assert "economic" not in _cell(fr, "pseudonymise/haiku", 1)

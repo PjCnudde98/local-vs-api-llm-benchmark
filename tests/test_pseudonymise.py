@@ -190,3 +190,24 @@ def test_lone_city_is_not_merged_into_an_address():
 def test_ner_city_next_to_street_becomes_one_address(ner_ps):
     out, mapping = ner_ps.redact("Ik ben Jan Peeters, Kerkstraat 12, 9000 Gent. Bel me", "nl")
     assert "<ADDRESS_1>" in out and mapping["<ADDRESS_1>"] == "Kerkstraat 12, 9000 Gent"
+
+
+# -- conversations and trailing cities ------------------------------------------
+def test_mapping_carries_over_between_messages(ps):
+    first, m = ps.redact("Order ORD-1234567, mail a@b.com", "en")
+    second, m2 = ps.redact('{"order": "ORD-1234567", "other": "ORD-7654321"}', "en", m)
+    assert "<ORDER_1>" in second and "<ORDER_2>" in second
+    assert m2["<ORDER_1>"] == "ORD-1234567" and m2["<ORDER_2>"] == "ORD-7654321" and m2["<EMAIL_1>"] == "a@b.com"
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Write to 14 Elm Grove, Bristol", "Write to <ADDRESS_1>"),
+        ("Kerkstraat 12, Sint-Niklaas. Groeten", "<ADDRESS_1>. Groeten"),
+        ("Kerkstraat 12, Dank u", "<ADDRESS_1>, Dank u"),          # not a city: clause goes on
+        ("Kerkstraat 12, maar Jan woont elders.", "<ADDRESS_1>, maar Jan woont elders."),
+    ],
+)
+def test_city_right_after_a_street_is_part_of_the_address(ps, text, expected):
+    assert ps.redact(text, "nl")[0] == expected

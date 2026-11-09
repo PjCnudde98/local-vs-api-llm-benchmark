@@ -16,7 +16,7 @@ def _write(tmp_path, *rows, name="d.jsonl"):
 
 
 def _row(**kw):
-    return {"id": "x1", "source": "synthetic", "language": "en", "text": "hello", **kw}
+    return {"id": "x1", "source": "synthetic", "language": "en", "text": "hello", "tier": 3, **kw}
 
 
 def test_sample_dataset_loads_and_annotations_match_text():
@@ -61,6 +61,8 @@ def test_duplicate_ids_across_files_are_rejected(tmp_path):
         (_row(language="de"), "bad language"),
         (_row(text=""), "missing required"),
         ({"id": "x", "source": "synthetic", "language": "en"}, "missing required"),
+        ({"id": "x", "source": "synthetic", "language": "en", "text": "t"}, "missing required"),  # no tier
+        (_row(tier=7), "bad tier"),
         (_row(pii=[{"type": "PERSON"}]), "pii must be"),
         (_row(pii="Jan"), "pii must be"),
     ],
@@ -79,3 +81,29 @@ def test_broken_json_reports_file_and_line(tmp_path):
 def test_from_dict_defaults():
     c = Complaint.from_dict({"id": "x", "source": "real", "language": "nl", "text": "t"})
     assert c.pii == [] and c.facts == {} and c.gold_reply is None
+
+
+def test_sample_covers_every_tier():
+    assert {c.tier for c in load_dataset(SAMPLE)} == {1, 2, 3, 4, 5, 6}
+
+
+@pytest.mark.parametrize(
+    "row, message",
+    [
+        (_row(tier=1, gold={"type": "delivery", "language": "en", "urgency": "urgent", "sentiment": "neutral"}),
+         "gold.urgency"),
+        (_row(tier=2, gold={"fields": {"order_number": "ORD-1"}}), "gold.fields"),
+        (_row(tier=2, gold={"fields": {"order_number": None, "product": None, "requested_remedy": "cash",
+                                       "deadline": None}}), "requested_remedy"),
+        (_row(tier=5, gold={"decision": "refund"}), "tool_data.orders"),
+        (_row(tier=5, gold={"decision": "maybe"}, tool_data={"orders": {"o": {}}}), "gold.decision"),
+        (_row(tier=6, gold={"key_facts": []}), "key_facts"),
+    ],
+)
+def test_tier_gold_is_validated(tmp_path, row, message):
+    with pytest.raises(ValueError, match=message):
+        load_dataset(_write(tmp_path, row))
+
+
+def test_draft_tiers_need_no_gold(tmp_path):
+    assert [c.tier for c in load_dataset(_write(tmp_path, _row(tier=3), _row(id="b", tier=4)))] == [3, 4]

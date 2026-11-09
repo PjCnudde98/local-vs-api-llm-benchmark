@@ -1,12 +1,13 @@
 [project]
 name = "complaintexp"
-version = "0.2.0"
-description = "Experiment harness: on-prem vs Azure-hosted LLMs for drafting customer complaint replies"
+version = "0.3.0"
+description = "Experiment harness: where local open-weight LLMs stop being good enough for complaint handling, vs API models"
 requires-python = ">=3.10"
 dependencies = [
     "openai>=1.40",
     "pyyaml>=6.0",
     "python-dotenv>=1.0",
+    "anthropic>=2.6",
 ]
 
 [project.optional-dependencies]
