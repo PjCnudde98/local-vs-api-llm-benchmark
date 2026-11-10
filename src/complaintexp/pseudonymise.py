@@ -132,10 +132,12 @@ class Pseudonymiser:
             Span(m.start(), m.end(), t) for t, pat in self.patterns for m in pat.finditer(text)
         ]
         if self._analyzer is not None and language in NER_MODELS:
+            keys = _json_key_ranges(text)
             for r in self._analyzer.analyze(
                 text=text, language=language, entities=["PERSON", "LOCATION"]
             ):
-                spans.append(Span(r.start, r.end, r.entity_type))
+                if not any(k0 <= r.start and r.end <= k1 for k0, k1 in keys):
+                    spans.append(Span(r.start, r.end, r.entity_type))
         return _merge_addresses(_resolve_overlaps(spans), text)
 
     # -- transform ---------------------------------------------------------
@@ -177,6 +179,17 @@ class Pseudonymiser:
         for placeholder, value in mapping.items():
             text = text.replace(placeholder, value)
         return text
+
+
+# A quoted JSON object key: "delivered_on": ... The customer-facts block and tier-5
+# tool results are JSON, and spaCy tags field names such as "delivered_on" or
+# "shipping_charged_eur" as PERSON. Replacing a key hides what the value means,
+# so NER hits inside keys are ignored. Regex identifiers (order ids...) still apply.
+_JSON_KEY = re.compile(r'"((?:[^"\\\n]|\\.)*)"(?=\s*:)')
+
+
+def _json_key_ranges(text: str) -> list[tuple[int, int]]:
+    return [(m.start(1), m.end(1)) for m in _JSON_KEY.finditer(text)]
 
 
 def _resolve_overlaps(spans: list[Span]) -> list[Span]:

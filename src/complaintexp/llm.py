@@ -87,7 +87,8 @@ class LLMClient:
 
             self._client = OpenAI(
                 base_url=variant.base_url,
-                api_key=os.environ.get("LOCAL_API_KEY", "not-needed"),
+                # local servers ignore the key; a hosted endpoint names its own variable (api_key_env)
+                api_key=os.environ.get(variant.extra.get("api_key_env") or "LOCAL_API_KEY", "not-needed"),
                 timeout=float(os.environ.get("LOCAL_TIMEOUT_S", "600")),
             )
         elif variant.provider == "anthropic":

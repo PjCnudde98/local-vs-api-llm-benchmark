@@ -3,8 +3,9 @@
 import pytest
 
 from complaintexp.config import load_gates
-from complaintexp.report import (_pct, bootstrap_ci, build, costs_table, effort, evaluate_gates, fixed_per_month,
-                                 frontier, operations, quality, render_markdown, splits)
+from complaintexp.report import (_break_even, _pct, bootstrap_ci, build, costs_table, effort, evaluate_gates, fixed_per_month,
+                                 frontier, judge_agreement, operations, quality, render_markdown,
+                                 splits, volume_view)
 from complaintexp.schemas import Complaint
 
 from .conftest import insert_run, insert_score
@@ -426,3 +427,108 @@ def test_economic_failure_when_local_costs_more_than_cheapest_passing_api(con):
     assert econ[1000]["status"] == "fail"       # ~470 EUR/month spread over 1,000 replies
     assert econ[1000]["api_variant"] == "pseudonymise/haiku"
     assert "economic" not in _cell(fr, "pseudonymise/haiku", 1)
+
+
+# -- judge agreement ------------------------------------------------------------
+def _two_judges(con):
+    """Opus gives Claude drafts 5 and the others 3; GPT gives everything 3."""
+    for v, opus in (("raw/claude-x", 5), ("local/open-y", 3)):
+        for i in range(3):
+            insert_run(con, v, f"c{i}")
+            insert_score(con, "judgements", v, f"c{i}", opus, who="opus", hallucination=0)
+            insert_score(con, "judgements", v, f"c{i}", 3, who="gpt", hallucination=i % 2)
+
+
+def test_judge_agreement_compares_judges_on_the_same_drafts(con):
+    _two_judges(con)
+    (j,) = judge_agreement(con)
+    assert (j["a"], j["b"], j["n"]) == ("gpt", "opus", 6)
+    assert j["mean_diff"] == pytest.approx(-1.0) and j["mean_abs_diff"] == pytest.approx(1.0)
+    assert j["hallucination_agreement"] == pytest.approx(4 / 6)
+
+
+def test_judge_agreement_splits_the_gap_by_the_drafting_models_family(con):
+    # Opus is 2 points kinder to Claude drafts and agrees with GPT on the others: self-preference.
+    _two_judges(con)
+
+    class V:
+        def __init__(self, family):
+            self.family = family
+
+    (j,) = judge_agreement(con, {"raw/claude-x": V("claude"), "local/open-y": V("qwen")})
+    assert j["by_family"]["claude"]["mean_diff"] == pytest.approx(-2.0)
+    assert j["by_family"]["qwen"]["mean_diff"] == pytest.approx(0.0)
+
+
+def test_humans_are_one_source_averaged_per_draft(con):
+    insert_run(con, "raw/a", "c1")
+    insert_score(con, "judgements", "raw/a", "c1", 4, who="opus")
+    insert_score(con, "human_scores", "raw/a", "c1", 3, who="anna")
+    insert_score(con, "human_scores", "raw/a", "c1", 5, who="bert")
+    (j,) = judge_agreement(con)
+    assert (j["a"], j["b"], j["mean_b"], j["pearson_r"]) == ("opus", "human", 4.0, None)
+
+
+def test_markdown_explains_how_to_get_a_second_source(con):
+    insert_run(con, "raw/a", "c1")
+    insert_score(con, "judgements", "raw/a", "c1", 4, who="opus")
+    md = render_markdown(build(con, costs=COSTS, hours_csv=None, variants={}))
+    assert "## Judge agreement" in md and "--judge JUDGE_GPT" in md
+
+
+# -- cost against volume -----------------------------------------------------------
+def _local(fixed, cap=None):
+    return dict(fixed_eur_per_month=fixed, eur_per_reply_variable=0.0, capacity_per_month=cap)
+
+
+def _api(per_reply, fixed=0.0):
+    return dict(fixed_eur_per_month=fixed, eur_per_reply_variable=per_reply, capacity_per_month=None)
+
+
+def test_break_even_is_fixed_cost_over_api_price():
+    vol, note = _break_even(_local(1000), _api(0.01))
+    assert vol == pytest.approx(100_000) and "capacity unknown" in note
+
+
+def test_break_even_within_one_box():
+    vol, note = _break_even(_local(1000, cap=200_000), _api(0.01))
+    assert vol == pytest.approx(100_000) and note == ""
+
+
+def test_never_when_a_full_box_still_costs_more_than_the_api():
+    # a box serves 50,000 replies: EUR 0.02 each at best, the API charges 0.01
+    vol, note = _break_even(_local(1000, cap=50_000), _api(0.01))
+    assert vol is None and note.startswith("never")
+
+
+def test_always_when_the_api_route_carries_a_bigger_box():
+    # the abstract route pays for its local summariser
+    assert _break_even(_local(168, cap=50_000), _api(0.001, fixed=168))[0] == 0
+
+
+def test_volume_view_estimates_capacity_from_run_latency_when_not_measured():
+    ops = [dict(_op_row("local/m", "local", hardware="box"), mean_s=36.0),
+           _op_row("pseudonymise/haiku", "pseudonymise", "haiku")]
+    rows = costs_table(ops, [], COSTS, {}, {})
+    front = {"summary": [{"variant": "local/m", "passed": [1, 2, 4]}, {"variant": "pseudonymise/haiku", "passed": []}]}
+    vv = volume_view(ops, rows, {**COSTS, "max_utilisation": 0.5}, front, {})
+    m = next(x for x in vv["local"] if x["key"] == "local/m")
+    assert m["capacity_per_month"] == pytest.approx(100 * 730 * 0.5) and "run latency" in m["capacity_source"]
+    assert m["quality_through"] == 2  # passes 1 and 2, misses 3
+    assert [a["key"] for a in vv["api"]] == ["pseudonymise/haiku"]
+
+
+def test_volume_view_adds_hardware_profiles_without_a_measured_model():
+    ops = [_op_row("local/m", "local", hardware="box"), _op_row("pseudonymise/haiku", "pseudonymise", "haiku")]
+    vv = volume_view(ops, costs_table(ops, [], COSTS, {}, {}), COSTS, {"summary": []}, {})
+    keys = {x["key"] for x in vv["local"]}
+    assert "hardware:vm" in keys and "hardware:box" not in keys and "hardware:empty" not in keys
+    vm = next(p for p in vv["break_even"] if p["local"] == "hardware:vm")
+    assert vm["volume"] == pytest.approx(730 / vv["api"][0]["eur_per_reply_variable"])
+
+
+def test_markdown_has_the_break_even_table(con):
+    insert_run(con, "local/m", "c1", route="local", hardware="box")
+    insert_run(con, "pseudonymise/haiku", "c1", model_key="haiku")
+    md = render_markdown(build(con, costs=COSTS, hours_csv=None, variants={}))
+    assert "### When local becomes cheaper" in md and "| vm (hardware only) | 730 |" in md

@@ -40,6 +40,9 @@ DECISIONS = ("refund", "replacement", "redelivery", "voucher", "decline", "escal
 
 
 # -- gold-label checks (used by schemas.load_dataset) ---------------------------
+DATED_TIERS = (5, 6)  # the gold decision depends on today's date
+
+
 def validate_gold(c: "Complaint") -> list[str]:
     """Problems with the tier-specific gold data of one complaint (empty = fine)."""
     g, p = c.gold or {}, []
@@ -62,6 +65,8 @@ def validate_gold(c: "Complaint") -> list[str]:
         kf = g.get("key_facts")
         if not isinstance(kf, list) or not kf or not all(isinstance(x, str) and x for x in kf):
             p.append("tier 6 needs gold.key_facts: a non-empty list of strings")
+    if c.tier in DATED_TIERS and not getattr(c, "received_on", None):
+        p.append(f"tier {c.tier} needs received_on (YYYY-MM-DD): the policy's time windows count from it")
     return p
 
 

@@ -1,10 +1,16 @@
-PLACEHOLDER POLICY. Replace with your real complaint policy before any scored run,
-and freeze it at gate 3 (identical for all variants).
+Complaint policy, version 2026-11-10. The company sells online and in stores in Belgium.
 
-1. Delivery: if a parcel is late by more than 3 working days, apologise and offer free re-delivery or a full refund.
-2. Damaged goods: customer must send a photo within 14 days of delivery; then replacement or refund, customer's choice.
-3. Returns: 30-day return window from delivery for unused items. After that, no refund; a 10% goodwill voucher may be offered.
-4. Billing: duplicate charges are refunded within 5 working days after the agent verifies them. Never promise a date earlier than that.
-5. Staff behaviour: apologise, say the feedback is passed to the store manager, never discuss disciplinary action.
-6. Legal threats or press mentions: do not argue or admit liability; say the complaint is escalated to the complaints manager, who replies within 5 working days.
-7. Never promise compensation beyond the items above. Never share another customer's data.
+Definitions: "today" is the date the complaint was received. Days are calendar days unless working days are stated; working days are Monday to Friday, Belgian public holidays excluded. A window "within N days of delivery" includes day N after the delivery date. "Unused" means not used beyond unpacking, checking or a trial assembly, with all parts present. When a customer changes what they ask for, their latest request counts.
+
+1. Late delivery: a parcel is late when it has not been delivered more than 3 working days after its promised delivery date, which is the date in the order confirmation (a later estimate by an agent does not move it). If it is late, apologise and let the customer choose between free re-delivery and a full refund of the order; if the customer already said which one they want, grant that choice. If it is not late yet, apologise, share the status and say from which date the customer can come back if it has still not arrived.
+2. Incomplete delivery: if an item is missing from a delivered order, send it again at no cost or refund that item, as the customer prefers. Never ask the customer to return the rest of the order.
+3. Damaged on arrival: transport damage must be reported with a photo within 14 days of delivery. Then the customer chooses a replacement (if in stock) or a full refund, and we collect the damaged item at no cost. If the first photo arrived more than 14 days after delivery, decline the damage claim politely and explain the 14-day rule.
+4. Defects after use: a product that stops working through normal use falls under the 2-year legal warranty. Do not decide the remedy yourself: say that the after-sales team contacts the customer within 5 working days to arrange a repair or replacement (decision: escalate).
+5. Returns: an unused item can be returned within 30 days of delivery for a full refund, with free return shipping. What counts is the date the customer registered the return request (email, phone or returns portal), not the pickup or arrival date of the parcel. From day 31 to day 60, for an unused item: no refund, but offer a goodwill voucher of 10% of the item price. Used items, and requests after day 60: decline.
+6. Billing errors: a duplicate charge, a charge for a cancelled order, or a shipping fee on an order with free shipping is refunded within 5 working days after the agent has verified it in the payment record. Never promise an earlier date. If the payment record does not show the error, explain what was charged and decline. Refunds always go to the original payment method: never ask for, use or repeat bank details the customer sent.
+7. Staff behaviour: apologise and say the feedback is passed to the store manager, who may contact the customer. Never name the staff member and never discuss disciplinary action.
+8. Repeat contacts: if the customer contacted us twice or more about the same unresolved issue, apologise explicitly for that and give one concrete next step with a date. You may add a one-off goodwill voucher of EUR 10 per order, on top of what the other rules allow.
+9. Legal threats, press or consumer-authority mentions: do not argue, do not admit liability and do not decide the remedy; say the complaint is escalated to the complaints manager, who replies within 5 working days (decision: escalate). This rule takes precedence over rules 1 to 8.
+10. Written commitments: a remedy that an agent confirmed to the customer in writing is honoured, even when a later automated message or one of the rules above says otherwise. Point out the conflict in the agent note.
+11. Safety and vulnerability: if the customer reports an injury, fire, smoke or electric shock, tell them to stop using the product and escalate to the product-safety team (decision: escalate). If the customer mentions illness, disability, bereavement or financial hardship, acknowledge it with care, do not ask for details, and flag it in the agent note.
+12. Never promise compensation, amounts, dates or remedies beyond these rules. Never share another customer's data.

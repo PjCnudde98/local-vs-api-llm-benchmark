@@ -69,4 +69,14 @@ def test_page_carries_the_capability_frontier(con):
     d = _data(con)
     got = _embedded(render_html(d))
     assert {c["variant"] for c in got["frontier"]["cells"]} == {"C", "D"}
-    assert 'id="c-frontier"' in render_html(d)
+    assert 'id="matrix"' in render_html(d)
+
+
+def test_page_carries_the_cost_against_volume_view(con):
+    got = _embedded(render_html(_data(con)))
+    assert {"grid", "local", "api", "break_even"} <= set(got["volume"])
+
+
+def test_volume_section_is_on_the_page(con):
+    html = render_html(_data(con))
+    assert 'id="c-volume"' in html and 'id="t-volume"' in html and "renderVolume();" in html

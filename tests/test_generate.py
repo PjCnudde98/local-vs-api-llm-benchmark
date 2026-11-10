@@ -1,6 +1,9 @@
 """Synthetic complaint generation (generate.py)."""
 
 import json
+from datetime import date
+
+import yaml
 
 from complaintexp import ROOT
 from complaintexp.generate import generate
@@ -88,6 +91,30 @@ def test_tier6_adds_policy_pages_and_key_facts(tmp_path):
     reply["key_facts"] = ["fact one", "fact two"]
     _, (c,), _, _ = _gen(tmp_path, 6, json.dumps(reply))
     assert c.gold["key_facts"] == ["fact one", "fact two"] and c.context_docs
+
+
+def test_tier6_pages_are_the_rules_that_resolve_the_contradiction(tmp_path):
+    # Run 1: three random policy lines, so the rule the gold relied on was often not retrieved.
+    reply = json.loads(gen_reply("From: a\nDate: 2026-01-01\nhello"))
+    reply["key_facts"] = ["fact"]
+    _, (c,), _, client = _gen(tmp_path, 6, json.dumps(reply))
+    resolving = [p for p in c.context_docs if p in client.calls[0][1]]
+    assert resolving and len(c.context_docs) == len(resolving) + 1
+
+
+def test_every_row_gets_a_received_date_the_generator_is_told(tmp_path):
+    _, (c,), _, client = _gen(tmp_path, 3, gen_reply())
+    assert c.received_on and f"received on {c.received_on}" in client.calls[0][1]
+    lo, hi = yaml.safe_load(SCENARIOS.read_text(encoding="utf-8"))["received_between"]
+    assert str(lo) <= c.received_on <= str(hi) and date.fromisoformat(c.received_on).weekday() < 5
+
+
+def test_tier5_prompt_quotes_the_policy_rule(tmp_path):
+    reply = json.loads(gen_reply("Order ORD-1234567 is late."))
+    reply["tool_data"] = {"orders": {"ORD-1234567": {"status": "in transit"}}}
+    _, _, _, client = _gen(tmp_path, 5, json.dumps(reply))
+    rule = next(ln for ln in client.calls[0][1].splitlines() if ln.startswith("Policy rule: "))
+    assert rule.removeprefix("Policy rule: ")[0].isdigit()
 
 
 @pytest.mark.parametrize("tier", [2, 5, 6])

@@ -93,6 +93,12 @@ def test_blind_export_variant_filter(two_variants, sample, tmp_path):
     assert {r["variant"] for r in _read(tmp_path / "k.csv")} == {"D"}
 
 
+def test_blind_export_drafts_cap_is_balanced_over_variants(two_variants, sample, tmp_path):
+    n = export_blind(two_variants, sample, tmp_path / "s.csv", tmp_path / "k.csv", n=10, max_drafts=4)
+    got = [r["variant"] for r in _read(tmp_path / "k.csv")]
+    assert n == 4 and sorted(got) == ["C", "C", "D", "D"]
+
+
 def _fill(sheet_path, values):
     rows = _read(sheet_path)
     crit = [c for c in rows[0] if c not in ("blind_id", "language", "complaint", "draft", "hallucination(0/1)", "edit_minutes")]

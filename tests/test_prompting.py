@@ -21,6 +21,13 @@ def test_user_message_contains_language_text_and_facts():
     assert "language: fr" in msg and "Bonjour" in msg and '"amount_eur": 42.0' in msg
 
 
+def test_user_message_carries_the_date_received_as_today():
+    # Run 1: no date anywhere, so "more than 3 working days late" could not be decided.
+    c = Complaint(id="x", source="synthetic", language="nl", text="t", tier=5, received_on="2026-11-04")
+    assert build_user_message(c).startswith("# Complaint (language: nl, received: 2026-11-04)\n")
+    assert "Today is the date the complaint was received" in load_system_prompt(5)
+
+
 def test_user_message_with_no_facts_is_stable():
     c = Complaint(id="x", source="synthetic", language="en", text="t")
     assert build_user_message(c).endswith("# Customer facts\n{}\n")

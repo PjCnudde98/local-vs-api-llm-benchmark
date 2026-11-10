@@ -161,7 +161,8 @@ def cmd_export_blind(args) -> int:
     con = _db(args)
     out = Path(args.out)
     keys = select(load_variants(), args.variants) if args.variants else None
-    n = export_blind(con, _datasets(args), out, out.with_suffix(".key.csv"), n=args.n, variants=keys)
+    n = export_blind(con, _datasets(args), out, out.with_suffix(".key.csv"), n=args.n, variants=keys,
+                     max_drafts=args.drafts)
     print(f"wrote {n} drafts to {out} and key to {out.with_suffix('.key.csv')} (keep the key from raters)")
     return 0
 
@@ -267,13 +268,15 @@ def main(argv: list[str] | None = None) -> int:
     sp = sub.add_parser("judge", help="LLM-judge stored drafts (tiers 3, 4, 6)")
     data_arg(sp)
     variants_arg(sp)
-    sp.add_argument("--judge", default="JUDGE", help="judge key from config/variants.yaml (JUDGE, JUDGE_GPT)")
+    sp.add_argument("--judge", default="JUDGE", help="judge key from config/variants.yaml (JUDGE, JUDGE_GPT, JUDGE_OPENAI)")
     sp.set_defaults(fn=cmd_judge)
 
     sp = sub.add_parser("export-blind", help="shuffled, unlabeled sheet for human scoring (tiers 3, 4, 6)")
     data_arg(sp)
     sp.add_argument("--out", default=str(ROOT / "results" / "blind_review.csv"))
-    sp.add_argument("--n", type=int, default=60)
+    sp.add_argument("--n", type=int, default=60, help="complaints (every variant's draft of each)")
+    sp.add_argument("--drafts", type=int, help="cap the sheet at this many drafts, balanced over variants "
+                    "(a small human overlap sample to check the judges)")
     variants_arg(sp, required=False)
     sp.set_defaults(fn=cmd_export_blind)
 

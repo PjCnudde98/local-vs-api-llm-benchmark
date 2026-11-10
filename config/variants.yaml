@@ -279,7 +279,8 @@ variants:
 
 # LLM judges for the rubric (tiers 3, 4, 6). A judge never scores its own
 # model. Judges favour their own family, so use both and compare
-# (`cexp judge --judge JUDGE` and `--judge JUDGE_GPT`).
+# (`cexp judge --judge JUDGE` and `--judge JUDGE_GPT`, or `--judge JUDGE_OPENAI`
+# without Azure). The report's judge-agreement table shows how far they differ.
 judges:
   JUDGE:
     label: LLM judge (Claude Opus 5.5)
@@ -296,6 +297,20 @@ judges:
     label: LLM judge (GPT)
     provider: azure
     model: ${AZURE_DEPLOYMENT_JUDGE}
+    temperature: null
+    token_param: max_completion_tokens
+    cloud: true
+    pii: raw
+    allow_real_data: false
+    max_tokens: 2000
+    json_mode: true
+    request: {reasoning_effort: low}
+  JUDGE_OPENAI:                    # the same GPT-family judge through the OpenAI API, when there is no Azure deployment
+    label: LLM judge (GPT, OpenAI API)
+    provider: openai_compatible
+    base_url: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+    api_key_env: OPENAI_API_KEY
+    model: ${OPENAI_JUDGE_MODEL}
     temperature: null
     token_param: max_completion_tokens
     cloud: true

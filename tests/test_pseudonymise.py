@@ -192,6 +192,14 @@ def test_ner_city_next_to_street_becomes_one_address(ner_ps):
     assert "<ADDRESS_1>" in out and mapping["<ADDRESS_1>"] == "Kerkstraat 12, 9000 Gent"
 
 
+@pytest.mark.ner
+@pytest.mark.parametrize("key", ["delivered_on", "shipping_charged_eur", "photo_received_on"])
+def test_ner_leaves_json_keys_alone(ner_ps, key):
+    # Run 1: spaCy tagged "delivered_on" as PERSON, so the tool result lost its delivery date.
+    out, _ = ner_ps.redact(f'{{"status": "delivered", "{key}": "2026-09-10", "note": "Mark Evans called"}}', "en")
+    assert f'"{key}": "2026-09-10"' in out and "Mark Evans" not in out
+
+
 # -- conversations and trailing cities ------------------------------------------
 def test_mapping_carries_over_between_messages(ps):
     first, m = ps.redact("Order ORD-1234567, mail a@b.com", "en")

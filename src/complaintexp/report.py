@@ -222,6 +222,99 @@ def costs_table(ops: list[dict], qual: list[dict], costs: dict, variants: dict,
     return rows
 
 
+VOLUME_GRID = [100 * 10 ** (e / 4) for e in range(0, 21)]  # 100 to 10 million replies/month, 4 steps per decade
+
+
+def _monthly(opt: dict, vol: float) -> float | None:
+    """Monthly EUR of one option at a volume: boxes x fixed cost, plus tokens for API routes."""
+    if opt["fixed_eur_per_month"] is None or opt["eur_per_reply_variable"] is None:
+        return None
+    cap = opt.get("capacity_per_month")
+    boxes = max(1, math.ceil(vol / cap)) if cap else 1
+    return boxes * opt["fixed_eur_per_month"] + opt["eur_per_reply_variable"] * vol
+
+
+def _break_even(local: dict, api: dict, max_boxes: int = 1000) -> tuple[float | None, str]:
+    """Lowest monthly volume from which `local` costs no more than `api`, and why (or why never).
+
+    Local cost is flat per box and steps up when a box is full; API cost grows with
+    every reply. If the API line has not overtaken one box by the time that box is
+    full, it never overtakes: a full box is the cheapest a local reply gets.
+    """
+    fl, cap = local["fixed_eur_per_month"], local.get("capacity_per_month")
+    fa, va = api["fixed_eur_per_month"] or 0.0, api["eur_per_reply_variable"]
+    if fl is None or va is None:
+        return None, "inputs missing"
+    if not va:
+        return None, "the API option has no per-reply cost"
+    for n in range(1, (max_boxes if cap else 1) + 1):
+        lo = (n - 1) * cap if cap else 0.0
+        vol = max(lo, (n * fl - fa) / va, 0.0)
+        if cap is None or vol <= n * cap:
+            note = "" if cap else "capacity unknown: assumes one box keeps up"
+            return vol, note
+    full = fl / cap
+    return None, (f"never: a full box costs EUR {full:.4f} per reply, "
+                  f"the API EUR {va:.4f}")
+
+
+def volume_view(ops: list[dict], cost_rows: list[dict], costs: dict, front: dict,
+                variants: dict) -> dict:
+    """Cost against monthly volume: where each local option becomes cheaper than each API route.
+
+    Local options are the measured local variants (their box, with capacity from a
+    throughput run, else estimated from the run latency at concurrency 1) and every
+    other hardware profile in costs.yaml with complete inputs (capacity unknown until a
+    model is measured on it). API options are the routes allowed for personal data.
+    `quality_through`: the last tier of an unbroken run of passed tiers from tier 1,
+    so the page can compare only options good enough for the tiers you need.
+    """
+    util = costs.get("max_utilisation", 1.0)
+    o_by = {o["variant"]: o for o in ops}
+    through = {}
+    for s in front.get("summary") or []:
+        k = 0
+        while k + 1 in s["passed"]:
+            k += 1
+        through[s["variant"]] = k
+    local, api = [], []
+    for r in cost_rows:
+        o, route = o_by.get(r["variant"], {}), o_route(ops, r["variant"])
+        base = dict(key=r["variant"], kind="variant", hardware=r["hardware"],
+                    fixed_eur_per_month=r["fixed_eur_per_month"], eur_per_reply_variable=r["eur_per_reply_variable"],
+                    quality_through=through.get(r["variant"]))
+        if route in ("local", "own_tenant"):
+            if r.get("replies_per_hour"):
+                cap, src = r["replies_per_hour"] * 730 * util, "measured throughput"
+            elif o.get("mean_s"):
+                cap, src = 3600 / o["mean_s"] * 730 * util, "run latency, one request at a time (lower bound)"
+            else:
+                cap, src = None, "unknown"
+            local.append(dict(base, capacity_per_month=cap, capacity_source=src))
+        elif route in API_ROUTES and r["eur_per_reply_variable"] is not None:
+            api.append(dict(base, capacity_per_month=None))
+    measured = {x["hardware"] for x in local}
+    for hw in costs.get("hardware") or {}:
+        fixed = fixed_per_month(costs, hw)
+        if fixed is not None and hw not in measured:
+            local.append(dict(key=f"hardware:{hw}", kind="hardware", hardware=hw, fixed_eur_per_month=fixed,
+                              eur_per_reply_variable=0.0, quality_through=None,
+                              capacity_per_month=None, capacity_source="no model measured on it yet"))
+    for x in local:
+        cap = x["capacity_per_month"]
+        x["eur_per_reply_at_full_box"] = x["fixed_eur_per_month"] / cap if cap and x["fixed_eur_per_month"] else None
+    pairs = []
+    for x in local:
+        for a in api:
+            vol, note = _break_even(x, a)
+            pairs.append(dict(local=x["key"], api=a["key"], volume=vol, note=note))
+    grid = [round(v) for v in VOLUME_GRID]
+    curves = {x["key"]: [_monthly(x, v) for v in grid] for x in local + api}
+    return dict(grid=grid, local=local, api=api, break_even=pairs, curves=curves,
+                volumes=costs["volumes_per_month"], max_utilisation=util,
+                agent_eur_per_hour=costs.get("agent_eur_per_hour"))
+
+
 def o_route(ops: list[dict], variant: str) -> str | None:
     return next((o.get("route") for o in ops if o["variant"] == variant), None)
 
@@ -276,6 +369,52 @@ def quality(con: sqlite3.Connection) -> list[dict]:
             by_v[r["variant"]].append(r)
         for v in sorted(by_v):
             out.append(dict(source=src, variant=v, **_summarise(by_v[v])))
+    return out
+
+
+def judge_agreement(con: sqlite3.Connection, variants: dict | None = None) -> list[dict]:
+    """How far the score sources agree on the drafts they both scored.
+
+    Sources: every judge model on its own, and the human raters (averaged per draft).
+    Per pair: the mean overall of each, the mean signed and absolute difference, Pearson r
+    and how often the hallucination flags match. `by_family` splits the signed difference
+    by the drafting model's family: a judge that favours its own family shows a larger gap
+    on that family's drafts than on the others.
+    """
+    per: dict[str, dict[tuple, dict]] = defaultdict(dict)
+    for r in _score_rows(con, "judgements"):
+        per[r["judge_model"]][(r["variant"], r["complaint_id"])] = r
+    human: dict[tuple, list[dict]] = defaultdict(list)
+    for r in _score_rows(con, "human_scores"):
+        human[(r["variant"], r["complaint_id"])].append(r)
+    for k, rs in human.items():
+        hall = [x["hallucination"] for x in rs if x.get("hallucination") is not None]
+        per["human"][k] = dict(overall=st.fmean(x["overall"] for x in rs),
+                               hallucination=round(st.fmean(hall)) if hall else None)
+    family = {k: getattr(v, "family", "") or "unknown" for k, v in (variants or {}).items()}
+    out = []
+    sources = sorted(per, key=lambda s: (s == "human", s))
+    for i, a in enumerate(sources):
+        for b in sources[i + 1:]:
+            both = sorted(set(per[a]) & set(per[b]))
+            if not both:
+                continue
+            xa = [per[a][k]["overall"] for k in both]
+            xb = [per[b][k]["overall"] for k in both]
+            diff = [p - q for p, q in zip(xa, xb)]
+            try:
+                r = st.correlation(xa, xb) if len(both) >= 3 else None
+            except st.StatisticsError:  # one side gave every draft the same score
+                r = None
+            flags = [(per[a][k].get("hallucination"), per[b][k].get("hallucination")) for k in both]
+            flags = [(p, q) for p, q in flags if p is not None and q is not None]
+            fam: dict[str, list[float]] = defaultdict(list)
+            for k, d in zip(both, diff):
+                fam[family.get(k[0], "unknown")].append(d)
+            out.append(dict(a=a, b=b, n=len(both), mean_a=st.fmean(xa), mean_b=st.fmean(xb),
+                            mean_diff=st.fmean(diff), mean_abs_diff=st.fmean(abs(d) for d in diff), pearson_r=r,
+                            hallucination_agreement=(sum(p == q for p, q in flags) / len(flags)) if flags else None,
+                            by_family={f: dict(n=len(ds), mean_diff=st.fmean(ds)) for f, ds in sorted(fam.items())}))
     return out
 
 
@@ -698,6 +837,21 @@ def display_names(keys: list[str], ops: list[dict], variants: dict | None) -> di
     return names
 
 
+def lineup(con: sqlite3.Connection, keys: list[str], variants: dict) -> dict:
+    """Who took part: model id and hosting per variant, the abstractor and the judges actually used."""
+    models: dict[str, dict] = {}
+    for k in keys:
+        v = variants.get(k)
+        if v is None or not hasattr(v, "model"):
+            continue
+        models[k] = dict(model_label=v.model_label or v.label, model_id=v.model, hosting=v.hosting,
+                         hardware=v.hardware, abstractor=v.abstractor if v.route == "abstract" else None)
+    judge_ids = [r[0] for r in con.execute("SELECT DISTINCT judge_model FROM judgements ORDER BY 1")]
+    labels = {getattr(v, "model", None): v.label for k, v in variants.items()
+              if k.startswith("JUDGE") and hasattr(v, "label")}
+    return dict(variants=models, judges=[{"model_id": j, "label": labels.get(j, j)} for j in judge_ids])
+
+
 # -- assemble -----------------------------------------------------------------
 def build(
     con: sqlite3.Connection,
@@ -736,6 +890,7 @@ def build(
     return dict(
         names=display_names(keys, ops, variants),
         variant_meta=meta_by,
+        lineup=lineup(con, keys, variants),
         meta=dict(
             generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
             harness_version=__version__,
@@ -749,8 +904,10 @@ def build(
         volumes=costs["volumes_per_month"],
         operations=ops,
         costs=cost_rows,
+        volume=volume_view(ops, cost_rows, costs, front, variants),
         throughput=tp,
         quality=qual,
+        judge_agreement=judge_agreement(con, variants),
         splits=splits(con),
         redaction=red,
         gates=gate_rows,
@@ -839,7 +996,9 @@ def render_markdown(data: dict) -> str:
         lines.append(f"| {nm(r['variant'])} | " + " | ".join(cells) +
                      f" | {_f(r['fixed_eur_per_month'])} | {_f(be, 0)}"
                      f"{' vs ' + nm(r['break_even_vs']) if be else ''} | {'; '.join(r['notes'])} |")
-    lines += ["", "(n/a = fill in config/costs.yaml; per sendable reply needs human edit times)", "", "## Quality", ""]
+    lines += ["", "(n/a = fill in config/costs.yaml; per sendable reply needs human edit times)", ""]
+    lines += _volume_markdown(data.get("volume"), nm)
+    lines += ["", "## Quality", ""]
     q = data["quality"]
     if not q:
         lines.append("No scores yet. Run `cexp judge` and/or `cexp import-scores`.")
@@ -863,6 +1022,23 @@ def render_markdown(data: dict) -> str:
                 lines.append(f"| {s['metric'].removeprefix('overall_')} | {nm(s['variant'])} | {s['value']} | "
                              f"{s['n']} | {_f(s['result'])} |")
 
+    ja = data.get("judge_agreement") or []
+    lines += ["", "## Judge agreement", ""]
+    if not ja:
+        lines.append("Only one score source so far. Run a second judge (`cexp judge --judge JUDGE_GPT` or "
+                     "`JUDGE_OPENAI`) and score a small human sample (`cexp export-blind --drafts 60`).")
+    else:
+        lines += ["Same drafts, two score sources. Difference = first minus second. A larger difference on "
+                  "one model family's drafts than on the others points to a judge favouring that family.", "",
+                  "| first | second | n | mean first | mean second | difference | mean abs. difference | "
+                  "Pearson r | same hallucination flag | difference by drafting family |",
+                  "|---|---|---|---|---|---|---|---|---|---|"]
+        for j in ja:
+            fam = "; ".join(f"{f} {x['mean_diff']:+.2f} (n={x['n']})" for f, x in j["by_family"].items())
+            ha = "n/a" if j["hallucination_agreement"] is None else f"{j['hallucination_agreement']:.0%}"
+            lines.append(f"| {j['a']} | {j['b']} | {j['n']} | {j['mean_a']:.2f} | {j['mean_b']:.2f} | "
+                         f"{j['mean_diff']:+.2f} | {j['mean_abs_diff']:.2f} | {_f(j['pearson_r'])} | {ha} | {fam} |")
+
     lines += ["", "## Privacy: redaction recall", ""]
     red = data["redaction"]
     if not red:
@@ -878,6 +1054,42 @@ def render_markdown(data: dict) -> str:
     if e["by_phase"]:
         lines += ["", "| phase | hours |", "|---|---|"] + [f"| {k} | {v:.1f} |" for k, v in sorted(e["by_phase"].items())]
     return "\n".join(lines) + "\n"
+
+
+def _vol(x: float | None) -> str:
+    return "n/a" if x is None else f"{x:,.0f}"
+
+
+def _volume_markdown(vv: dict | None, nm) -> list[str]:
+    """Break-even volume per local option against each API route."""
+    if not vv or not vv["local"] or not vv["api"]:
+        return ["### When local becomes cheaper", "",
+                "Needs at least one local option with a fixed cost and one API route with a token price."]
+    lab = lambda k: k.removeprefix("hardware:") + " (hardware only)" if k.startswith("hardware:") else nm(k)  # noqa: E731
+    be = {(p["local"], p["api"]): p for p in vv["break_even"]}
+    out = ["### When local becomes cheaper", "",
+           "Monthly volume from which a local option costs no more than the API route: fixed cost per box "
+           "(hardware amortisation, hosting, ops hours) against tokens x price. Quality is not part of this: "
+           "check the frontier for which options pass the tiers you need. Agent edit time is left out (the "
+           "same on both sides at equal quality).", "",
+           "| local option | fixed EUR / month / box | capacity per box (replies/month) | capacity from | "
+           "EUR per reply, full box | " + " | ".join(f"vs {nm(a['key'])}" for a in vv["api"]) + " |",
+           "|---|---|---|---|---|" + "---|" * len(vv["api"])]
+    for x in vv["local"]:
+        cells = []
+        for a in vv["api"]:
+            p = be[(x["key"], a["key"])]
+            cells.append("always" if p["volume"] == 0 else _vol(p["volume"]) if p["volume"] is not None
+                         else (p["note"].split(":")[0] or "n/a"))
+        out.append(f"| {lab(x['key'])} | {_f(x['fixed_eur_per_month'], 0)} | {_vol(x['capacity_per_month'])} | "
+                   f"{x['capacity_source']} | {_f(x['eur_per_reply_at_full_box'], 4)} | " + " | ".join(cells) + " |")
+    out += ["", "API routes per reply: " + "; ".join(f"{nm(a['key'])} EUR {a['eur_per_reply_variable']:.5f}"
+                                                   + (f" + EUR {a['fixed_eur_per_month']:,.0f}/month abstractor box"
+                                                      if a["fixed_eur_per_month"] else "") for a in vv["api"]) + ".",
+            "\"never\" = even a fully used box costs more per reply than the API; \"always\" = the API route "
+            "already pays for a box of that cost (the abstractor). Capacity uses "
+            f"max_utilisation {vv['max_utilisation']:g}."]
+    return out
 
 
 def render(con: sqlite3.Connection, **kwargs) -> str:

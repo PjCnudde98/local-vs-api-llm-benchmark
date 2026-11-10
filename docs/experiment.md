@@ -127,6 +127,7 @@ experienced agent, to anchor scoring and calibrate the judge.
 | `source` | yes | `synthetic` or `real`; drives the real-data safeguard |
 | `language` | yes | `nl`, `fr` or `en` |
 | `tier` | yes | 1-6 |
+| `received_on` | tiers 5, 6 | `YYYY-MM-DD` the complaint arrived. The prompt shows it next to the language and the model treats it as today: the policy's time windows count up to it |
 | `text` | yes | the complaint as the customer wrote it; for tier 6 the whole thread |
 | `type` | no | delivery, damage, billing, refund, staff, repeat |
 | `difficulty` | no | simple, angry, rambling, multi_issue, legal, out_of_policy, mixed_language |
@@ -150,11 +151,14 @@ patterns, and where it can, the answer key:
 
 - Tier 1: the harness picks urgency and sentiment; the model writes a matching complaint.
 - Tier 2: the model plants the fields and returns them; the agent checks them.
+- Every row: the harness picks `received_on`, a working day in `received_between`, and tells
+  the generator that dates must fit it.
 - Tier 5: the harness picks a case from `scenarios.yaml` (situation, policy rule, correct
-  decision); the model writes the complaint and the tool data that make that decision correct.
-  **Update the cases when you replace the placeholder policy.**
-- Tier 6: the model writes an 8-14 message thread with a planted contradiction and lists the
-  key facts; the harness adds three policy lines as retrieved pages.
+  decision) and quotes the rule; the model writes the complaint and the tool data that make that
+  decision correct. **Update the cases and rule numbers whenever `prompts/policy.md` changes.**
+- Tier 6: the model writes an 8-14 message thread with a planted contradiction, resolved under
+  the rules listed for that contradiction in `scenarios.yaml`, and lists the key facts. Those
+  rules become the retrieved pages, plus one unrelated rule.
 
 Rows whose gold fails validation are dropped and logged. Generation is seeded (`--seed`).
 
@@ -250,8 +254,15 @@ Plus a hallucination flag (0/1). Variant-level metrics (all scored drafts of a v
 | Hallucination rate | Rows flagged 1 / rows with a flag. |
 | Edit effort | Median `edit_minutes` from human sheets. |
 
-Two judges are configured: Claude Opus 5.5 (`JUDGE`) and a GPT deployment (`JUDGE_GPT`). Judges
-favour their own family, so run both and compare them with the human overlap sample. A judge
+Two judge families are configured: Claude Opus 5.5 (`JUDGE`) and GPT, through an Azure
+deployment (`JUDGE_GPT`) or the OpenAI API (`JUDGE_OPENAI`, key in `OPENAI_API_KEY`). Judges
+favour their own family, so run both and compare them with the human overlap sample
+(`cexp export-blind --drafts 60`: a sheet of 60 drafts spread evenly over the variants).
+The report's **judge agreement** table compares every pair of score sources (each judge, and the
+humans averaged per draft) on the drafts both scored: mean of each, signed and absolute
+difference, Pearson r, how often the hallucination flags match, and the signed difference split
+by the drafting model's family. A judge that favours its own family shows a larger gap on that
+family's drafts. A judge
 is refused when its model equals the variant's model (for hybrid: either routed-to model), and
 never receives real complaints when it runs in the cloud. For tier 6 the judge also gets the
 numbered key facts and returns `consistent` and `missed_facts`.
@@ -285,6 +296,25 @@ Inputs in `config/costs.yaml`; `null` stays `n/a` rather than a made-up number.
 - **Break-even:** local fixed cost per month / the cheapest API variant's cost per reply.
 
 Reported at the volumes in `volumes_per_month` (1,000 and 50,000).
+
+**Cost against volume** (`report.volume_view`, report section "At what volume does local pay
+off?"). For every local option and every API route allowed for personal data (pseudonymise,
+abstract) it computes the monthly volume from which the local option costs no more than the API:
+
+- Local options: each measured local variant on its hardware profile, and every other hardware
+  profile in `costs.yaml` with complete inputs ("hardware only": no model measured on it, so its
+  capacity is unknown and one box is assumed to keep up).
+- Capacity of one box: replies/hour from `cexp throughput` when measured, otherwise 3,600 / mean
+  run latency (one request at a time: a lower bound, since a GPU server batches requests), x 730 h
+  x `max_utilisation`.
+- Break-even: the lowest volume where boxes x fixed cost <= tokens x price (+ the abstractor's box
+  for the abstract route). If one full box still costs more per reply than the API, the answer is
+  "never": more boxes only repeat that cost. If the API route already pays for a box as big
+  (the abstract route's summariser), the answer is "always".
+- Quality is not part of the number. The HTML page filters both sides to setups that pass every
+  tier up to the one you pick, and draws cost per reply against volume (log-log) with the
+  break-even points and one minute of agent time for scale. Agent edit time is left out: it is the
+  same on both sides at equal quality.
 
 ## 7. Gates and how they are evaluated
 
@@ -357,6 +387,11 @@ Reports name variants by model and route, e.g. "Claude Haiku 5.5 (pseudonymised)
 - **Redaction recall** is measured on annotated complaints only; annotation misses are invisible.
 - **Address patterns** need a street word or a postcode. A bare `Damrak 1` is missed.
 - **Placeholders.** A model that rewrites a placeholder (`<PERSON 1>`) leaves it in the draft. The raw output is kept.
+- **Policy.** `prompts/policy.md` is written for this experiment (a fictional Belgian retailer),
+  not a real company's policy. Tiers 4-6 measure compliance with it. Swap in a real policy, and
+  re-check every gold answer, if the result must hold for one company.
+- **Hardware prices.** The values marked illustrative in `config/costs.yaml` are estimates; the
+  break-even volumes move with them, and ops hours dominate the fixed cost.
 
 ## 13. Status on 2026-11-09
 
@@ -368,6 +403,23 @@ Reports name variants by model and route, e.g. "Claude Haiku 5.5 (pseudonymised)
 - Earlier runs (2026-11-06, v0.2): `mistral-small3.2` and `qwen3:8b` on the 6 drafting samples.
   Those rows have no tier and are kept only for reference.
 - Not yet run: anything on the new lineup.
+
+### Run 1 (2026-11-09) and what changed after it (2026-11-10)
+
+Run 1: 15 variants (Claude Sonnet 5.5 and Haiku 5.5 on the raw, pseudonymise and abstract routes,
+thinking on and off; Qwen3 8B and Mistral Small 3.2 on a laptop) on the 13 sample complaints,
+judged by Claude Opus 5.5 only. Its database is kept for reference; rerun everything for run 2,
+because prompts, policy and gold changed.
+
+| Problem found in run 1 | Change |
+|---|---|
+| spaCy tagged JSON field names (`delivered_on`, `shipping_charged_eur`) as PERSON, so the pseudonymised tool result and facts block lost what the value meant (sample-502, sample-006) | NER hits inside JSON object keys are ignored; regex identifiers still apply (`pseudonymise._json_key_ranges`) |
+| No "today" in the prompt, so "more than 3 working days late" could not be decided (sample-501) | `received_on` per complaint, shown in the prompt header; system rule: count windows up to that date; required for tiers 5 and 6 |
+| Tier 6 gold demanded a refund that the placeholder policy forbade, and the task prompt said both "promises count" and "policy decides" (14 of 15 variants failed) | New policy with rule 5 (the registration date of a return counts) and rule 10 (written commitments are honoured); task prompt resolves contradictions with the policy; sample-601 gets the rules that decide it as its retrieved pages |
+| Placeholder policy | `prompts/policy.md` v2026-11-10: 12 rules plus definitions (working days, "unused", latest request counts); tier-5 cases renumbered, two added (warranty escalation, written commitment) |
+| Generated tier-6 threads got three random policy lines as retrieved pages | Each contradiction lists the rules that resolve it; they become the pages, plus one distractor |
+| One judge, same family as every cloud candidate | `JUDGE_OPENAI` (GPT through the OpenAI API) next to `JUDGE_GPT` (Azure); judge-agreement table; `export-blind --drafts` for a small balanced human sample |
+| The cost table answered "what at 1,000 and 50,000 a month", not "from what volume" | Cost-against-volume section with break-even volumes; illustrative hardware prices filled in |
 
 ## 14. Not built yet
 
