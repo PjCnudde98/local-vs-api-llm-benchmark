@@ -98,6 +98,9 @@ def test_sample_covers_every_tier():
         (_row(tier=5, gold={"decision": "refund"}), "tool_data.orders"),
         (_row(tier=5, gold={"decision": "maybe"}, tool_data={"orders": {"o": {}}}), "gold.decision"),
         (_row(tier=6, gold={"key_facts": []}), "key_facts"),
+        (_row(tier=5, gold={"decision": "refund"}, tool_data={"orders": {"o": {}}}), "needs received_on"),
+        (_row(tier=6, gold={"key_facts": ["f"]}), "needs received_on"),
+        (_row(tier=3, received_on="4 Nov 2026"), "received_on must be YYYY-MM-DD"),
     ],
 )
 def test_tier_gold_is_validated(tmp_path, row, message):

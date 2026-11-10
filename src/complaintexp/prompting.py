@@ -44,13 +44,16 @@ def load_router_prompt() -> str:
 
 
 def build_user_message(c: Complaint, text: str | None = None, heading: str | None = None) -> str:
-    """Complaint (or a replacement text, e.g. the abstract route's summary), language and facts.
+    """Complaint (or a replacement text, e.g. the abstract route's summary), language, date received and facts.
 
-    Tier 6 adds the retrieved policy pages after the thread.
+    The date received is "today" for the policy's time windows. Tier 6 adds the
+    retrieved policy pages after the thread.
     """
     heading = heading or ("Email thread" if c.tier == 6 else "Complaint")
     facts = json.dumps(c.facts, ensure_ascii=False, indent=2) if c.facts else "{}"
-    msg = f"# {heading} (language: {c.language})\n{(text if text is not None else c.text).strip()}\n\n# Customer facts\n{facts}\n"
+    received = f", received: {c.received_on}" if c.received_on else ""
+    msg = (f"# {heading} (language: {c.language}{received})\n{(text if text is not None else c.text).strip()}\n\n"
+           f"# Customer facts\n{facts}\n")
     if c.tier == 6 and c.context_docs:
         pages = "\n\n".join(f"## Page {i}\n{d.strip()}" for i, d in enumerate(c.context_docs, 1))
         msg += f"\n# Retrieved policy pages\n{pages}\n"

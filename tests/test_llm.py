@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from complaintexp.config import load_variants
 from complaintexp.llm import LLMClient
 from complaintexp.prompting import parse_output
 
@@ -32,6 +33,18 @@ def _client(**kw):
 def test_fake_provider_returns_parseable_output():
     out = LLMClient(make_variant(provider="fake")).complete("sys", "# Complaint\nhello")
     assert parse_output(out.text).ok and out.model_id == "fake-1"
+
+
+def test_hosted_openai_compatible_endpoint_reads_its_own_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-judge")
+    v = make_variant(provider="openai_compatible", base_url="http://127.0.0.1:1/v1",
+                     extra={"api_key_env": "OPENAI_API_KEY"})
+    assert LLMClient(v)._client.api_key == "sk-judge"
+
+
+def test_shipped_second_judge_without_azure_is_a_gpt_endpoint():
+    j = load_variants()["JUDGE_OPENAI"]
+    assert j.provider == "openai_compatible" and j.extra["api_key_env"] == "OPENAI_API_KEY" and j.cloud
 
 
 def test_unknown_provider_is_rejected():

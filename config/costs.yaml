@@ -19,9 +19,13 @@ models:
 #   + hosting_eur_per_month (power, rack) + ops_hours_per_month x eur_per_ops_hour.
 # A GPU VM in your own subscription (own_tenant route) uses vm_eur_per_hour x hours_per_month instead.
 # Each local model names its profile with `hardware:` in config/variants.yaml.
+#
+# The values marked "illustrative" are rough 2026 list-price estimates so the
+# break-even chart has something to show. Replace them with quotes. Ops hours
+# usually dominate the fixed cost: 20 h x EUR 80 = EUR 1,600 a month per box.
 hardware:
-  laptop:
-    hardware_eur: null
+  laptop:                       # dev only: what run 1 used, not a production option
+    hardware_eur: 3000          # illustrative: 64 GB laptop
     amortisation_months: 36
     hosting_eur_per_month: 5
     ops_hours_per_month: 1
@@ -33,17 +37,17 @@ hardware:
     ops_hours_per_month: 20     # 0.2 FTE, about EUR 1,600 a month
     eur_per_ops_hour: 80
   gpu-80gb:
-    hardware_eur: null
+    hardware_eur: 35000         # illustrative: server with one 80-96 GB data-centre GPU
     amortisation_months: 36
     hosting_eur_per_month: 200
     ops_hours_per_month: 20
     eur_per_ops_hour: 80
   xl-server-512gb:              # >128 GB server for the XL class: 512 GB RAM + GPUs
-    hardware_eur: null
+    hardware_eur: 60000         # illustrative: 512 GB RAM, two 96 GB GPUs
     amortisation_months: 36
-    hosting_eur_per_month: null
+    hosting_eur_per_month: 400  # illustrative: power and rack space
     ops_hours_per_month: 20
     eur_per_ops_hour: 80
   azure-gpu-vm:                 # own_tenant route
-    vm_eur_per_hour: null
+    vm_eur_per_hour: 3.5        # illustrative: one 80 GB GPU VM, pay as you go
     hours_per_month: 730

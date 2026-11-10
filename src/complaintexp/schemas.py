@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 from .tiers import TIERS, validate_gold
@@ -19,6 +20,7 @@ class Complaint:
     language: str  # nl | fr | en
     text: str  # the complaint; for tier 6 the whole email thread
     tier: int = 0  # 1-6, see tiers.TIERS
+    received_on: str | None = None  # YYYY-MM-DD the complaint arrived; the model treats it as today
     type: str = ""  # delivery, damage, billing, refund, staff, repeat
     difficulty: str = ""  # simple, angry, rambling, multi_issue, legal, out_of_policy
     facts: dict = field(default_factory=dict)  # structured customer facts
@@ -35,6 +37,14 @@ class Complaint:
     def from_dict(cls, d: dict) -> "Complaint":
         known = cls.__dataclass_fields__.keys()
         return cls(**{k: v for k, v in d.items() if k in known})
+
+
+def _is_date(s) -> bool:
+    try:
+        date.fromisoformat(s)
+    except (TypeError, ValueError):
+        return False
+    return len(s) == 10
 
 
 def load_dataset(*paths: Path) -> list[Complaint]:
@@ -62,6 +72,8 @@ def load_dataset(*paths: Path) -> list[Complaint]:
                 raise ValueError(f"bad language {c.language!r} for {c.id} ({where})")
             if c.tier not in TIERS:
                 raise ValueError(f"bad tier {c.tier!r} for {c.id}: use 1-6 ({where})")
+            if c.received_on is not None and not _is_date(c.received_on):
+                raise ValueError(f"received_on must be YYYY-MM-DD for {c.id}, got {c.received_on!r} ({where})")
             if not isinstance(c.pii, list) or any(
                 not isinstance(p, dict) or not p.get("type") or not p.get("text") for p in c.pii
             ):

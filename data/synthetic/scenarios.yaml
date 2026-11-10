@@ -25,6 +25,10 @@ pii_patterns:       # at least a few of these per complaint
 
 sensitive_context: [none, none, none, health or disability, bereavement, financial hardship]
 
+# "Today" for every generated complaint: a working day in this range, picked by the
+# harness. Dates in the complaint and its data must fit it (the policy counts from it).
+received_between: ["2026-09-01", "2026-11-06"]
+
 # -- per tier (plan: "Task complexity ladder"; 25 complaints per tier) -----------
 tiers:
   1:  # classify: the harness picks the labels, the generator writes a matching complaint
@@ -41,21 +45,25 @@ tiers:
     difficulties: [angry, rambling, multi_issue, legal, out_of_policy, mixed_language]
   5:  # policy reasoning with tools. Each case fixes the gold decision under prompts/policy.md;
       # the generator writes the complaint and tool data that make it so.
-      # Update these cases whenever you replace the placeholder policy.
+      # Update these cases (and the rule numbers) whenever prompts/policy.md changes.
     cases:
       - {decision: refund, situation: "parcel more than 3 working days late, customer asks for a refund", policy_rule: 1}
       - {decision: redelivery, situation: "parcel more than 3 working days late, customer still wants the item", policy_rule: 1}
-      - {decision: replacement, situation: "damaged item, photo sent within 14 days of delivery, customer wants a new one", policy_rule: 2}
-      - {decision: decline, situation: "damaged item, but the first photo arrived more than 14 days after delivery", policy_rule: 2}
-      - {decision: refund, situation: "unused item returned within 30 days of delivery", policy_rule: 3}
-      - {decision: voucher, situation: "return request 40-60 days after delivery for an unused item", policy_rule: 3}
-      - {decision: refund, situation: "duplicate charge that the payment record confirms", policy_rule: 4}
-      - {decision: decline, situation: "customer claims a duplicate charge but the payment record shows one charge", policy_rule: 4}
-      - {decision: escalate, situation: "customer threatens legal action or the press over a late refund", policy_rule: 6}
-  6:  # long context: an email thread with a contradiction about what was promised
+      - {decision: replacement, situation: "damaged on arrival, photo sent within 14 days of delivery, customer wants a new one", policy_rule: 3}
+      - {decision: decline, situation: "damaged on arrival, but the first photo arrived more than 14 days after delivery", policy_rule: 3}
+      - {decision: escalate, situation: "product stopped working after three months of normal use", policy_rule: 4}
+      - {decision: refund, situation: "unused item, return request registered within 30 days of delivery", policy_rule: 5}
+      - {decision: voucher, situation: "return request 40-60 days after delivery for an unused item", policy_rule: 5}
+      - {decision: refund, situation: "duplicate charge that the payment record confirms", policy_rule: 6}
+      - {decision: decline, situation: "customer claims a duplicate charge but the payment record shows one charge", policy_rule: 6}
+      - {decision: escalate, situation: "customer threatens legal action or the press over a late refund", policy_rule: 9}
+      - {decision: refund, situation: "return request after day 30, but the contact history shows an agent confirmed a full refund in writing", policy_rule: 10}
+  6:  # long context: an email thread with a contradiction. `rules` are the policy rules that
+      # resolve it: they become the retrieved pages (plus one unrelated rule) and the
+      # generator must write key facts that follow them.
     messages: [8, 14]
     contradictions:
-      - an agent promised a refund in writing; a later automated mail says the return window has closed
-      - the customer first says the item was unused, later mentions using it twice
-      - two agents gave different delivery dates
-      - the customer changes the requested remedy halfway through the thread
+      - {text: "an agent promised a refund in writing; a later automated mail says the return window has closed", rules: [5, 10]}
+      - {text: "the customer first says the item was unused, later mentions using it twice", rules: [5]}
+      - {text: "two agents gave different delivery dates", rules: [1]}
+      - {text: "the customer changes the requested remedy halfway through the thread", rules: [3]}

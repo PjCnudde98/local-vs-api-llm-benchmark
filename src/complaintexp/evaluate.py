@@ -87,10 +87,14 @@ def export_blind(
     n: int = 60,
     variants: list[str] | None = None,
     seed: int = 42,
+    max_drafts: int | None = None,
 ) -> int:
     """Write a shuffled review sheet (no variant labels) plus a separate key file.
 
     Only draft tiers (3, 4, 6) are exported: tiers 1, 2 and 5 are scored automatically.
+    `n` complaints, every variant's draft of each. `max_drafts` caps the sheet for a small
+    human overlap sample (to calibrate the judges): drafts are taken round-robin over
+    variants, so each variant gets about the same number.
     """
     rubric = load_rubric()
     by_id = {c.id: c for c in complaints}
@@ -114,6 +118,13 @@ def export_blind(
         for r in con.execute(q + " ORDER BY variant", [cid, *vargs]):
             rows.append((cid, r["variant"], normalise_for_blind(r["draft"])))
     rng.shuffle(rows)
+    if max_drafts is not None:
+        by_v: dict[str, list] = {}
+        for row in rows:
+            by_v.setdefault(row[1], []).append(row)
+        queues = [by_v[v] for v in sorted(by_v)]
+        rows = [q[i] for i in range(max(map(len, queues), default=0)) for q in queues if i < len(q)][:max_drafts]
+        rng.shuffle(rows)
 
     criteria = list(rubric["criteria"])
     out_csv.parent.mkdir(parents=True, exist_ok=True)

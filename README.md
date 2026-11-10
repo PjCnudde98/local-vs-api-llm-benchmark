@@ -61,16 +61,18 @@ uv run cexp run --variants 'local/*' --data data/real/real.jsonl
 uv run cexp throughput --variants local/qwen3.6-27b --concurrency 1 2 4 8   # capacity for the cost model
 
 uv run cexp judge --variants '*' --judge JUDGE --data data/synthetic/*.jsonl     # Claude judge, tiers 3/4/6
-uv run cexp judge --variants '*' --judge JUDGE_GPT --data data/synthetic/*.jsonl # second judge, other family
-uv run cexp export-blind --n 60                                  # shuffled sheet + separate key
+uv run cexp judge --variants '*' --judge JUDGE_GPT --data data/synthetic/*.jsonl # second judge, other family (Azure)
+#   no Azure: --judge JUDGE_OPENAI with OPENAI_API_KEY and OPENAI_JUDGE_MODEL in .env
+uv run cexp export-blind --drafts 60                             # small human overlap sample, balanced over variants
 uv run cexp import-scores results/blind_review.csv --key results/blind_review.key.csv --rater anna
 uv run cexp report --html --out results/report.md                # frontier, gates, cost, quality, privacy
 ```
 
 `cexp report --html` writes `results/report.html`: a single offline page with the capability
 frontier (one line per model across the six tiers, threshold marked), every gate, filters by
-variant, tier, route and language, charts, cost per sendable reply, and every model's answer
-side by side per complaint. Real complaint text is left out unless you pass `--include-real-text`.
+variant, tier, route and language, charts, cost per sendable reply, the monthly volume from
+which each local option is cheaper than each API route, how far the judges agree, and every
+model's answer side by side per complaint. Real complaint text is left out unless you pass `--include-real-text`.
 
 ## Routes
 
@@ -95,12 +97,14 @@ side by side per complaint. Real complaint text is left out unless you pass `--i
 
 ## Before the first scored run
 
-1. Replace `prompts/policy.md` (placeholder), update the tier-5 cases in
-   `data/synthetic/scenarios.yaml` to match it, and freeze prompts at gate 3.
+1. `prompts/policy.md` is a policy written for this experiment (fictional retailer). Replace it
+   if you test for a real company, update the tier-5 cases and tier-6 rule numbers in
+   `data/synthetic/scenarios.yaml` to match, and freeze prompts at gate 3.
 2. Serve the local models and set names and URLs in `.env` ([docs/models.md](docs/models.md)).
    Send one request per variant to check the thinking switch works.
 3. Lock model versions and quants at gate 1 and write them down.
 4. Fill in `config/costs.yaml` (prices, hardware quotes, exchange rate); `null` shows as n/a.
+   Hardware values marked illustrative are estimates so the break-even chart has something to show.
 5. Adjust `DEFAULT_ID_PATTERNS` in `src/complaintexp/pseudonymise.py` to your order/customer ID formats.
 6. Log hours per task in `hours_log.csv`; effort is one of the experiment's results.
 

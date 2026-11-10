@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import random
 import re
+from datetime import date, timedelta
 from pathlib import Path
 
 import yaml
@@ -26,7 +27,7 @@ GEN_SYSTEM = """You write realistic but entirely fictional customer complaints f
 Invent all names, addresses, numbers. Never use real people or companies.
 Return only JSON with keys:
   "text": the complaint exactly as a customer would write it, in the requested language,
-  "facts": object with structured customer facts (order_status, delivery_date, return_window_days, prior_contacts, amount_eur),
+  "facts": object with structured customer facts (order_status, promised_by, delivery_date (only once delivered), prior_contacts, amount_eur),
   "pii": list of {"type": one of PERSON|LOCATION|EMAIL|PHONE|IBAN|ORDER|NATIONAL_ID, "text": the exact substring in "text"}{extra}
 Every "pii" item must appear verbatim in "text"."""
 
@@ -41,9 +42,17 @@ EXTRA = {
 }
 
 
-def _policy_lines() -> list[str]:
+def _policy_rules() -> dict[int, str]:
+    """Numbered policy rules by number: each is one line of prompts/policy.md."""
     text = (ROOT / "prompts" / "policy.md").read_text(encoding="utf-8")
-    return [ln.strip() for ln in text.splitlines() if re.match(r"\s*\d+\.", ln)]
+    return {int(m[1]): ln.strip() for ln in text.splitlines() if (m := re.match(r"\s*(\d+)\.", ln))}
+
+
+def _received_on(sc: dict, rng: random.Random) -> str:
+    """A working day in `received_between`: the complaint's "today"."""
+    lo, hi = (date.fromisoformat(str(d)) for d in sc.get("received_between") or ["2026-11-02", "2026-11-06"])
+    days = [lo + timedelta(i) for i in range((hi - lo).days + 1)]
+    return rng.choice([d for d in days if d.weekday() < 5] or days).isoformat()
 
 
 def _scenario(tier: int, sc: dict, rng: random.Random) -> tuple[str, dict, dict]:
@@ -55,9 +64,12 @@ def _scenario(tier: int, sc: dict, rng: random.Random) -> tuple[str, dict, dict]
     diff = rng.choice(t.get("difficulties") or sc["difficulties"])
     pii = rng.sample(sc["pii_patterns"], k=rng.randint(3, 5))
     sens = rng.choice(sc["sensitive_context"])
+    received = _received_on(sc, rng)
     lines = [f"Language: {lang}", f"Complaint type: {ctype}", f"Style/difficulty: {diff}",
-             f"Include these PII patterns: {', '.join(pii)}", f"Sensitive context: {sens}"]
-    row: dict = dict(language=lang, type=ctype, difficulty=diff)
+             f"Include these PII patterns: {', '.join(pii)}", f"Sensitive context: {sens}",
+             f"The complaint is received on {received}: that is today. Every date in the text and the data "
+             "is on or before it."]
+    row: dict = dict(language=lang, type=ctype, difficulty=diff, received_on=received)
     gold: dict = {}
     if tier == 1:
         gold = dict(type=ctype, language=lang, urgency=rng.choice(t.get("urgency") or LABELS["urgency"]),
@@ -73,18 +85,28 @@ def _scenario(tier: int, sc: dict, rng: random.Random) -> tuple[str, dict, dict]
         case = rng.choice(t["cases"])
         gold = {"decision": case["decision"]}
         row["type"] = None
+        rule = _policy_rules().get(case["policy_rule"], f"rule {case['policy_rule']}")
         lines += [f"Situation: {case['situation']}",
+                  f"Policy rule: {rule}",
                   f"Under policy rule {case['policy_rule']} the correct remedy is: {case['decision']}. "
                   "The complaint itself must not state the dates or records that decide this: they are only in tool_data.",
                   "Mention exactly one order number (format ORD-1234567)."]
     elif tier == 6:
         lo, hi = t.get("messages") or [8, 14]
         n = rng.randint(lo, hi)
+        con = rng.choice(t.get("contradictions") or [{"text": "two agents disagree", "rules": []}])
+        con = con if isinstance(con, dict) else {"text": con, "rules": []}
+        policy = _policy_rules()
+        rules = [policy[r] for r in con.get("rules") or [] if r in policy]
+        others = [ln for k, ln in sorted(policy.items()) if k not in (con.get("rules") or [])]
         lines += [f"Write an email thread of {n} messages between the customer and agents, oldest first, "
-                  "each starting with a 'From:' and 'Date:' line.",
-                  f"Contradiction to include: {rng.choice(t.get('contradictions') or ['two agents disagree'])}"]
-        policy = _policy_lines()
-        row["context_docs"] = rng.sample(policy, k=min(3, len(policy)))
+                  f"each starting with a 'From:' and 'Date:' line. The last message is from the customer, dated {received}.",
+                  f"Contradiction to include: {con['text']}"]
+        if rules:
+            lines += ["Resolve the contradiction under these policy rules; the key facts must follow them:",
+                      *rules]
+        # the pages that resolve it, plus one unrelated rule so retrieval is not a give-away
+        row["context_docs"] = rules + rng.sample(others, k=min(1 if rules else 3, len(others)))
     return "\n".join(lines), row, gold
 
 
